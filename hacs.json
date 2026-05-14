@@ -1,0 +1,9 @@
+{
+  "name": "Snapcast Plus",
+  "content_in_root": true,
+  "zip_release": false,
+  "render_readme": true,
+  "domains": ["snapcast_plus"],
+  "homeassistant": "2024.1.0",
+  "hacs": "2.0.0"
+}

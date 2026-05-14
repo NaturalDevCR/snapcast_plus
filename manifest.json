@@ -1,0 +1,13 @@
+{
+  "domain": "snapcast_plus",
+  "name": "Snapcast Plus",
+  "codeowners": ["@luar123"],
+  "config_flow": true,
+  "documentation": "https://github.com/luar123/snapcast-haos",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/luar123/snapcast-haos/issues",
+  "loggers": ["construct", "snapcast"],
+  "requirements": ["snapcast==2.3.7"],
+  "version": "1.0.0"
+}
