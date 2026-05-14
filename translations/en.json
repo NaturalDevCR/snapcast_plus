@@ -38,5 +38,25 @@
         "name": "Snapcast Client"
       }
     }
+  },
+  "services": {
+    "restore": {
+      "description": "Restores a previously taken snapshot of a media player.",
+      "name": "Restore"
+    },
+    "set_latency": {
+      "description": "Sets the latency of a speaker.",
+      "fields": {
+        "latency": {
+          "description": "Latency in milliseconds.",
+          "name": "Latency"
+        }
+      },
+      "name": "Set latency"
+    },
+    "snapshot": {
+      "description": "Takes a snapshot of what is currently playing on a media player.",
+      "name": "Snapshot"
+    }
   }
 }

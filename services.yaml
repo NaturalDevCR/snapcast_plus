@@ -13,7 +13,7 @@ restore:
 set_latency:
   target:
     entity:
-      integration: snapcast
+      integration: snapcast_plus
       domain: media_player
   fields:
     latency:

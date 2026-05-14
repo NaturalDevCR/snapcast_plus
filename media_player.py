@@ -8,7 +8,7 @@ Snapserver.  This eliminates the class of bugs where entities stop
 responding after a server reconnect.
 """
 
-from collections.abc import Mapping
+from datetime import datetime
 import logging
 from typing import Any
 
@@ -23,7 +23,7 @@ from homeassistant.components.media_player import (
     MediaType,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -356,23 +356,52 @@ class SnapcastClientDevice(SnapcastCoordinatorEntity, MediaPlayerEntity):
         """Take a snapshot of the client state."""
         device = self._get_device()
         if device is None:
-            return
-        device.snapshot()
+            _LOGGER.debug("Cannot snapshot %s: device not available", self.entity_id)
+            raise HomeAssistantError(
+                f"Cannot snapshot {self.entity_id}: "
+                "Snapcast device is not available."
+            )
+        try:
+            device.snapshot()
+        except Exception as ex:
+            raise HomeAssistantError(
+                f"Failed to snapshot {self.entity_id}: {ex}"
+            ) from ex
 
     async def async_restore(self) -> None:
         """Restore a previously saved snapshot."""
         device = self._get_device()
         if device is None:
-            return
-        await device.restore()
+            _LOGGER.debug("Cannot restore %s: device not available", self.entity_id)
+            raise HomeAssistantError(
+                f"Cannot restore {self.entity_id}: "
+                "Snapcast device is not available."
+            )
+        try:
+            await device.restore()
+        except Exception as ex:
+            raise HomeAssistantError(
+                f"Failed to restore {self.entity_id}: {ex}"
+            ) from ex
         self.async_write_ha_state()
 
     async def async_set_latency(self, latency: int) -> None:
         """Set client latency in milliseconds."""
         device = self._get_device()
         if device is None:
-            return
-        await device.set_latency(latency)
+            _LOGGER.debug(
+                "Cannot set latency for %s: device not available", self.entity_id
+            )
+            raise HomeAssistantError(
+                f"Cannot set latency for {self.entity_id}: "
+                "Snapcast device is not available."
+            )
+        try:
+            await device.set_latency(latency)
+        except Exception as ex:
+            raise HomeAssistantError(
+                f"Failed to set latency for {self.entity_id}: {ex}"
+            ) from ex
         self.async_write_ha_state()
 
     # ------------------------------------------------------------------
@@ -386,14 +415,6 @@ class SnapcastClientDevice(SnapcastCoordinatorEntity, MediaPlayerEntity):
         if device is None:
             return None
         return device.latency
-
-    @property
-    def extra_state_attributes(self) -> Mapping[str, Any]:
-        """Additional state attributes."""
-        lat = self.latency
-        if lat is not None:
-            return {"latency": lat}
-        return {}
 
     def _stream_metadata(self) -> dict[str, Any]:
         """Raw metadata dict of the current stream."""
@@ -467,4 +488,11 @@ class SnapcastClientDevice(SnapcastCoordinatorEntity, MediaPlayerEntity):
                     return int(value)
         except KeyError:
             pass
+        return None
+
+    @property
+    def media_position_updated_at(self) -> datetime | None:
+        """When the position was last updated."""
+        if self.media_position is not None:
+            return datetime.now()
         return None

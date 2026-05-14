@@ -27,7 +27,7 @@ async def async_setup_entry(
 
     try:
         await coordinator.async_config_entry_first_refresh()
-    except OSError as ex:
+    except Exception as ex:
         raise ConfigEntryNotReady(
             f"Could not connect to Snapcast server at "
             f"{entry.data[CONF_HOST]}:{entry.data[CONF_PORT]}"

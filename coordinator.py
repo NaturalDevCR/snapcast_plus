@@ -100,6 +100,8 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
             self.port,
             ex,
         )
+        if self.hass.is_stopping:
+            return
         if self._reconnect_task is None or self._reconnect_task.done():
             self._reconnect_task = self.hass.async_create_task(
                 self._reconnect_loop()
