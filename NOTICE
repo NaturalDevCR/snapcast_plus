@@ -1,0 +1,9 @@
+Snapcast Plus
+Copyright 2024 NaturalDevCR
+
+This product includes software developed by the Home Assistant project
+(https://github.com/home-assistant/core), specifically the Snapcast integration,
+licensed under the Apache License, Version 2.0.
+
+This integration is a derivative work of the official Home Assistant Snapcast integration
+with bug fixes and improvements.
