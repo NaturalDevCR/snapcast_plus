@@ -1,19 +1,19 @@
 snapshot:
   target:
     entity:
-      integration: snapcast_plus
+      integration: snapcast
       domain: media_player
 
 restore:
   target:
     entity:
-      integration: snapcast_plus
+      integration: snapcast
       domain: media_player
 
 set_latency:
   target:
     entity:
-      integration: snapcast_plus
+      integration: snapcast
       domain: media_player
   fields:
     latency:

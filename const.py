@@ -2,10 +2,10 @@
 
 from homeassistant.const import Platform
 
-DOMAIN = "snapcast_plus"
+DOMAIN = "snapcast"
 DEFAULT_TITLE = "Snapcast"
 
-CLIENT_PREFIX = f"{DOMAIN}_client_"
+CLIENT_PREFIX = "snapcast_client_"
 CLIENT_SUFFIX = "Snapcast Client"
 LATENCY_SUFFIX = "Latency"
 

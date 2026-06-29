@@ -8,6 +8,7 @@ Snapserver.  This eliminates the class of bugs where entities stop
 responding after a server reconnect.
 """
 
+from collections.abc import Mapping
 from datetime import datetime
 import logging
 from typing import Any
@@ -415,6 +416,19 @@ class SnapcastClientDevice(SnapcastCoordinatorEntity, MediaPlayerEntity):
         if device is None:
             return None
         return device.latency
+
+    @property
+    def extra_state_attributes(self) -> Mapping[str, Any]:
+        """Return extra state attributes (back-compat with official integration).
+
+        Also exposed via dedicated ``sensor.*`` entities — the attribute is kept
+        so automations or templates that read ``state_attr(entity, "latency")``
+        keep working unchanged after the upgrade.
+        """
+        attrs: dict[str, Any] = {}
+        if (latency := self.latency) is not None:
+            attrs["latency"] = latency
+        return attrs
 
     def _stream_metadata(self) -> dict[str, Any]:
         """Raw metadata dict of the current stream."""
