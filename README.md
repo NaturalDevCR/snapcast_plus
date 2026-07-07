@@ -1,14 +1,14 @@
 # Snapcast Plus
 
-Custom Home Assistant integration for [Snapcast](https://github.com/badaix/snapcast) — a multi-room synchronous audio solution.
+A drop-in replacement for the official Home Assistant [Snapcast](https://www.home-assistant.io/integrations/snapcast) integration — same `domain`, same `unique_id`s, same services, same config flow, but with critical reliability fixes and quality-of-life improvements baked in.
 
-Based on the official Home Assistant Snapcast integration with key bug fixes and reliability improvements.
+## Why a drop-in replacement?
 
-## Why Snapcast Plus
+The official Snapcast integration has a fundamental architectural flaw: it stores `Snapclient` object references in entities and reuses them indefinitely. When the Snapcast server restarts or the WebSocket reconnects, those references become stale because the snapcast library creates new Python objects internally. The result: entities stop responding to commands, show wrong state, and cannot recover without restarting Home Assistant.
 
-The official integration has a fundamental architectural flaw: it stores `Snapclient` object references in entities and reuses them indefinitely. When the Snapcast server restarts or the WebSocket reconnects, those references become stale because the snapcast library creates new Python objects internally. The result: entities stop responding to commands, show wrong state, and cannot recover without restarting Home Assistant.
+**Snapcast Plus** is published under the same integration domain (`snapcast`) with the same `unique_id` format (`snapcast_client_{host}:{port}_{client_id}`) and the same services (`snapcast.snapshot`, `snapcast.restore`, `snapcast.set_latency`). Home Assistant silently takes the new code over from the official one — no config migration, no entity renaming, no automation edits, no dashboard changes. Existing entries, entities, scripts, and templates keep working unchanged while every reliability issue is fixed underneath.
 
-**Snapcast Plus** solves this by never holding onto object references. Every property and action that needs the client or group data fetches a fresh reference from the coordinator on each access. Here is a detailed comparison:
+Here is a detailed comparison:
 
 ### Architecture
 
@@ -56,42 +56,59 @@ The official integration has a fundamental architectural flaw: it stores `Snapcl
 | **Removed clients** | Entities are removed from the registry | Same behavior |
 | **`_update_clients` guard** | No guard for `server is None` | Checks `if coordinator.server is None: return` before iterating clients |
 
+### Latency exposure
+
+| Aspect | Official Integration | Snapcast Plus |
+|---|---|---|
+| **Latency access** | Exposed only as `extra_state_attributes["latency"]` on the media_player | Dedicated `sensor.snapcast_client_*_latency` entities (with proper `unit_of_measurement`, `device_class`, `state_class`) **and** still exposed as `extra_state_attributes["latency"]` on the media_player for full back-compat |
+
+## Drop-in compatibility contract
+
+These are deliberately kept identical to the official integration so the upgrade is invisible:
+
+| Surface | Value |
+|---|---|
+| **Integration domain** | `snapcast` |
+| **Media player unique_id** | `snapcast_client_{host}:{port}_{client_id}` |
+| **Latency sensor unique_id** | `snapcast_client_{host}:{port}_{client_id}_latency` |
+| **Config flow keys** | `host` (string), `port` (int, default `1704`) |
+| **Config flow title** | `Snapcast` |
+| **Services** | `snapcast.snapshot`, `snapcast.restore`, `snapcast.set_latency` |
+| **`media_player` features** | `VOLUME_MUTE`, `VOLUME_SET`, `SELECT_SOURCE`, `GROUPING` |
+| **`media_player` properties** | `state`, `volume_level`, `is_volume_muted`, `source`, `source_list`, `group_members`, `media_title`, `media_artist`, `media_album_name`, `media_album_artist`, `media_track`, `media_duration`, `media_position`, `media_image_url`, `extra_state_attributes["latency"]` |
+| **Required HA version** | `2024.2.0+` |
+| **Python dependency** | `snapcast==2.3.8` |
+
 ## Installation
 
 ### HACS (recommended)
 
 1. Go to **HACS > Integrations > ⋮ > Custom repositories**
 2. Add `https://github.com/NaturalDevCR/snapcast_plus` as type **Integration**
-3. Search for "Snapcast Plus" and install
+3. Search for "Snapcast" and install
 4. Restart Home Assistant
+
+Because `snapcast_plus` registers under the `snapcast` domain, Home Assistant automatically picks up any existing official Snapcast config entry on startup. Your existing media_player entities, dashboards, scripts, and automations keep working unchanged.
+
+> Folder name is purely cosmetic. HACS will install the repo as `custom_components/snapcast_plus/`, but the integration registers as `snapcast`. If you prefer, rename the folder to `custom_components/snapcast/` — completely optional.
 
 ### Manual
 
-Copy the `snapcast_plus` folder into your `custom_components` directory:
+Copy the contents of this repo into a folder under `custom_components/`:
 
 ```
 custom_components/
-└── snapcast_plus/
+└── snapcast_plus/      ← folder name is irrelevant, domain comes from manifest.json
     ├── __init__.py
-    ├── config_flow.py
-    ├── const.py
-    ├── coordinator.py
-    ├── entity.py
-    ├── icons.json
-    ├── manifest.json
-    ├── media_player.py
-    ├── sensor.py
-    ├── services.py
-    ├── services.yaml
-    ├── strings.json
-    └── translations/
+    ├── manifest.json   ← declares `"domain": "snapcast"`
+    ├── ...
 ```
 
-Then restart Home Assistant.
+Restart Home Assistant. The custom `snapcast` integration will take precedence over the built-in one.
 
 ## Configuration
 
-After installation, go to **Settings > Devices & Services > Add Integration** and search for **Snapcast Plus**.
+After installation, go to **Settings > Devices & Services**. If you already had the official integration configured, your entry will be reused automatically. Otherwise, click **Add Integration** and search for **Snapcast**.
 
 - **Host**: IP address or hostname of your Snapcast server
 - **Port**: Snapcast control port (default: `1704`)
@@ -100,7 +117,7 @@ After installation, go to **Settings > Devices & Services > Add Integration** an
 
 ### Media player entities
 
-Each Snapcast client appears as a `media_player` entity in Home Assistant, exposing:
+Each Snapcast client appears as a `media_player` entity, exposing:
 
 - Volume control and mute
 - Stream/source selection
@@ -110,15 +127,15 @@ Each Snapcast client appears as a `media_player` entity in Home Assistant, expos
 
 ### Latency sensors
 
-Each Snapcast client also gets a dedicated `sensor` entity reporting its current latency in milliseconds. This enables latency-based automations (e.g., alert when a speaker falls out of sync).
+Each Snapcast client also gets a dedicated `sensor` entity reporting its current latency in milliseconds. This enables latency-based automations (e.g., alert when a speaker falls out of sync) using standard HA sensor machinery.
 
 ### Services
 
 | Service | Description |
 |---|---|
-| `snapcast_plus.snapshot` | Take a snapshot of a client's current state |
-| `snapcast_plus.restore` | Restore a previously saved snapshot |
-| `snapcast_plus.set_latency` | Set client latency in milliseconds |
+| `snapcast.snapshot` | Take a snapshot of a client's current state |
+| `snapcast.restore` | Restore a previously saved snapshot |
+| `snapcast.set_latency` | Set client latency in milliseconds |
 
 ### Auto-discovery
 
@@ -135,7 +152,7 @@ If the Snapcast server restarts or the connection drops, the integration reconne
 
 ### HA 2026.x compatibility
 
-This integration is compatible with Home Assistant 2026.5+. The deprecated `extra_state_attributes` property has been replaced with dedicated `sensor` entities per client, following the modern HA architecture.
+This integration is compatible with Home Assistant 2026.5+. The deprecated `extra_state_attributes` pattern is supplemented with dedicated `sensor` entities per client, following the modern HA architecture — but the attribute is still exposed for back-compat.
 
 ## Troubleshooting
 
@@ -144,6 +161,7 @@ This integration is compatible with Home Assistant 2026.5+. The deprecated `extr
 | Entities show as unavailable | Check that the Snapcast server is running and reachable on the configured host:port |
 | "Cannot connect" on setup | Verify the host address and port. Try the server IP instead of hostname |
 | Volume not updating | The 45s polling fallback will pick it up. Push updates are instant |
+| Old official entities still visible after install | Restart Home Assistant. HA picks up the new domain registration on cold start |
 
 ## License
 

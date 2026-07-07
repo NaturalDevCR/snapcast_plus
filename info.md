@@ -1,14 +1,13 @@
 # Snapcast Plus
 
-Home Assistant integration for [Snapcast](https://github.com/badaix/snapcast) — a multi-room synchronous audio solution.
+Drop-in replacement for the official Home Assistant Snapcast integration. Same `domain: snapcast`, same `unique_id`s, same services — but with critical reliability fixes:
 
-## Features
+- Self-managed reconnection with exponential backoff (no stale `Snapclient` references after server restarts).
+- 45-second polling fallback so entities never get stuck if a push callback is missed.
+- Dual-layer availability checks (coordinator + per-client existence on the server).
+- Explicit `last_update_success = False` + `async_update_listeners()` on disconnect so entities go unavailable immediately.
+- Defensive `None` guards everywhere.
 
-- Connect to a Snapcast server and control all clients and groups
-- Media player entities for each Snapcast client
-- Services: `snapshot`, `restore`, and `set_latency`
-- Config flow UI for easy setup
+Plus dedicated `sensor.*` entities for per-client latency (with proper `unit_of_measurement`, `device_class`, `state_class`) while still exposing `extra_state_attributes["latency"]` for back-compat.
 
-## Configuration
-
-After installing, go to **Settings > Devices & Services** and add the Snapcast Plus integration. Enter your Snapcast server host and port (default: 1704).
+Install via HACS as a custom repository (type: Integration). On restart, Home Assistant transparently picks up your existing Snapcast config entry — no migration needed.
