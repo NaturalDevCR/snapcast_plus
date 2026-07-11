@@ -173,7 +173,7 @@ uv pip install --python .venv/bin/python -r requirements_test.txt
 .venv/bin/python -m pytest tests/
 ```
 
-CI (GitHub Actions) runs the tests plus [HACS](https://github.com/hacs/action) and [hassfest](https://github.com/home-assistant/actions) validation on every push and PR.
+CI (GitHub Actions) runs the tests plus [HACS](https://github.com/hacs/action) validation on every push and PR. Hassfest is not run: it rejects (by design) custom integrations that register a core domain, which is exactly what this drop-in replacement does.
 
 ## License
 
