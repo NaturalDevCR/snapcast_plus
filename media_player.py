@@ -13,8 +13,6 @@ from datetime import datetime
 import logging
 from typing import Any
 
-from snapcast.control.client import Snapclient
-
 from homeassistant.components.media_player import (
     DOMAIN as MEDIA_PLAYER_DOMAIN,
     MediaPlayerDeviceClass,
@@ -27,6 +25,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .const import CLIENT_PREFIX, CLIENT_SUFFIX, DOMAIN
 from .coordinator import SnapcastConfigEntry, SnapcastUpdateCoordinator
@@ -129,10 +128,8 @@ class SnapcastClientDevice(SnapcastCoordinatorEntity, MediaPlayerEntity):
         device_id: str,
     ) -> None:
         """Initialise entity.  device_id is the Snapcast client identifier."""
-        super().__init__(coordinator)
+        super().__init__(coordinator, device_id)
 
-        self._device_id = device_id
-        self._host_id = coordinator.host_id
         self._attr_unique_id = self.build_unique_id(self._host_id, device_id)
 
         device = self._get_device()
@@ -151,20 +148,6 @@ class SnapcastClientDevice(SnapcastCoordinatorEntity, MediaPlayerEntity):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _get_device(self) -> Snapclient | None:
-        """Fetch a **fresh** Snapclient from the coordinator's server.
-
-        This is the key fix: we never hold a stale reference across
-        reconnection cycles.
-        """
-        server = self.coordinator.server
-        if server is None:
-            return None
-        try:
-            return server.client(self._device_id)
-        except (KeyError, AttributeError):
-            return None
-
     @property
     def _current_group(self):
         """Return the group the client currently belongs to."""
@@ -172,17 +155,6 @@ class SnapcastClientDevice(SnapcastCoordinatorEntity, MediaPlayerEntity):
         if device is None:
             return None
         return device.group
-
-    # ------------------------------------------------------------------
-    # Entity availability
-    # ------------------------------------------------------------------
-
-    @property
-    def available(self) -> bool:
-        """Available if the coordinator is connected and the client exists."""
-        if not self.coordinator.last_update_success:
-            return False
-        return self._get_device() is not None
 
     # ------------------------------------------------------------------
     # State
@@ -459,8 +431,7 @@ class SnapcastClientDevice(SnapcastCoordinatorEntity, MediaPlayerEntity):
     @property
     def media_artist(self) -> str | None:
         """Artist."""
-        value = self._stream_metadata().get("artist")
-        return ", ".join(value) if value else None
+        return self._join_metadata_list(self._stream_metadata().get("artist"))
 
     @property
     def media_album_name(self) -> str | None:
@@ -470,8 +441,19 @@ class SnapcastClientDevice(SnapcastCoordinatorEntity, MediaPlayerEntity):
     @property
     def media_album_artist(self) -> str | None:
         """Album artist."""
-        value = self._stream_metadata().get("albumArtist")
-        return ", ".join(value) if value else None
+        return self._join_metadata_list(
+            self._stream_metadata().get("albumArtist")
+        )
+
+    @staticmethod
+    def _join_metadata_list(value: Any) -> str | None:
+        """Metadata fields like artist are a list per spec, but some stream
+        sources report a plain string."""
+        if not value:
+            return None
+        if isinstance(value, str):
+            return value
+        return ", ".join(value)
 
     @property
     def media_track(self) -> int | None:
@@ -506,7 +488,7 @@ class SnapcastClientDevice(SnapcastCoordinatorEntity, MediaPlayerEntity):
 
     @property
     def media_position_updated_at(self) -> datetime | None:
-        """When the position was last updated."""
+        """When the position was last updated (must be UTC for HA)."""
         if self.media_position is not None:
-            return datetime.now()
+            return dt_util.utcnow()
         return None

@@ -81,10 +81,8 @@ class SnapcastLatencySensor(SnapcastCoordinatorEntity, SensorEntity):
         device_id: str,
     ) -> None:
         """Initialise latency sensor."""
-        super().__init__(coordinator)
+        super().__init__(coordinator, device_id)
 
-        self._device_id = device_id
-        self._host_id = coordinator.host_id
         self._attr_unique_id = self.build_unique_id(self._host_id, device_id)
 
         device = self._get_device()
@@ -98,23 +96,6 @@ class SnapcastLatencySensor(SnapcastCoordinatorEntity, SensorEntity):
     def build_unique_id(cls, host_id: str, device_id: str) -> str:
         """Build a unique entity ID."""
         return f"{CLIENT_PREFIX}{host_id}_{device_id}_latency"
-
-    def _get_device(self):
-        """Fetch a fresh Snapclient from the coordinator's server."""
-        server = self.coordinator.server
-        if server is None:
-            return None
-        try:
-            return server.client(self._device_id)
-        except (KeyError, AttributeError):
-            return None
-
-    @property
-    def available(self) -> bool:
-        """Available if the coordinator is connected and the client exists."""
-        if not self.coordinator.last_update_success:
-            return False
-        return self._get_device() is not None
 
     @property
     def native_value(self) -> int | None:

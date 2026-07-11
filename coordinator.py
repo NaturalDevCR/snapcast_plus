@@ -9,7 +9,10 @@ from snapcast.control.server import Snapserver
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import (
+    DataUpdateCoordinator,
+    UpdateFailed,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,6 +54,10 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         self._server: Snapserver | None = None
         self._reconnect_task: asyncio.Task | None = None
         self._reconnect_delay = 1
+        # Connection state must live outside last_update_success: the base
+        # DataUpdateCoordinator overwrites last_update_success after every
+        # poll, so it cannot be trusted as the "are we connected" signal.
+        self._connected = False
         self.last_update_success = False
 
     @property
@@ -75,6 +82,7 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         self._server.set_on_connect_callback(self._on_connect)
         self._server.set_on_disconnect_callback(self._on_disconnect)
         await self._server.start()
+        self._connected = True
 
     def _on_update(self) -> None:
         """Snapserver: data updated (push)."""
@@ -83,6 +91,7 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
 
     def _on_connect(self) -> None:
         """Snapserver: websocket connected."""
+        self._connected = True
         self.last_update_success = True
         self._reconnect_delay = 1
         _LOGGER.info(
@@ -92,6 +101,7 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
 
     def _on_disconnect(self, ex: Exception) -> None:
         """Snapserver: websocket disconnected.  Start reconnection loop."""
+        self._connected = False
         self.last_update_success = False
         self.async_update_listeners()
         _LOGGER.warning(
@@ -109,7 +119,7 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
 
     async def _reconnect_loop(self) -> None:
         """Continuously attempt reconnection with exponential backoff."""
-        while not self.last_update_success:
+        while not self._connected:
             delay = min(self._reconnect_delay, MAX_RECONNECT_DELAY)
             _LOGGER.debug(
                 "Reconnecting to %s:%s in %s seconds",
@@ -133,7 +143,7 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
 
     async def _do_reconnect(self) -> None:
         """Attempt a single reconnection cycle."""
-        if self.last_update_success:
+        if self._connected:
             return
 
         _LOGGER.debug("Attempting reconnect to %s:%s", self.host, self.port)
@@ -150,12 +160,22 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         await self._connect()
 
     async def _async_update_data(self) -> None:
-        """Polling fallback — just push data to entities if connected."""
-        if self.last_update_success and self._server is not None:
-            self.async_update_listeners()
+        """Polling fallback — push data to entities if connected.
+
+        Raising UpdateFailed while disconnected keeps last_update_success
+        False; the base coordinator would otherwise reset it to True after
+        this method returns, marking entities available with stale data and
+        aborting the reconnect loop.
+        """
+        if not self._connected or self._server is None:
+            raise UpdateFailed(
+                f"Not connected to Snapcast server at {self.host_id}"
+            )
+        self.async_update_listeners()
 
     async def disconnect(self) -> None:
         """Fully disconnect and cancel any pending reconnection."""
+        self._connected = False
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
             self._reconnect_task = None
