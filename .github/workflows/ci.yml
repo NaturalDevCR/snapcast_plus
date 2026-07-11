@@ -18,13 +18,12 @@ jobs:
         with:
           python-version: "3.13"
 
+      # setup-uv with python-version already creates and activates .venv
       - name: Install test dependencies
-        run: |
-          uv venv .venv
-          uv pip install --python .venv/bin/python -r requirements_test.txt
+        run: uv pip install -r requirements_test.txt
 
       - name: Run pytest
-        run: .venv/bin/python -m pytest tests/ -v
+        run: uv run --no-sync python -m pytest tests/ -v
 
   # No hassfest job: this integration deliberately registers the core
   # `snapcast` domain from a flat repo (drop-in replacement), which hassfest
