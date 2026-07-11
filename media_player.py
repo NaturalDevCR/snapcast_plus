@@ -121,6 +121,7 @@ class SnapcastClientDevice(SnapcastCoordinatorEntity, MediaPlayerEntity):
     )
     _attr_media_content_type = MediaType.MUSIC
     _attr_device_class = MediaPlayerDeviceClass.SPEAKER
+    _name_suffix = CLIENT_SUFFIX
 
     def __init__(
         self,
@@ -131,13 +132,6 @@ class SnapcastClientDevice(SnapcastCoordinatorEntity, MediaPlayerEntity):
         super().__init__(coordinator, device_id)
 
         self._attr_unique_id = self.build_unique_id(self._host_id, device_id)
-
-        device = self._get_device()
-        self._attr_name = (
-            f"{device.friendly_name} {CLIENT_SUFFIX}"
-            if device
-            else f"{device_id} {CLIENT_SUFFIX}"
-        )
 
     @classmethod
     def build_unique_id(cls, host_id: str, device_id: str) -> str:

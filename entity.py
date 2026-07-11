@@ -10,6 +10,8 @@ from .coordinator import SnapcastUpdateCoordinator
 class SnapcastCoordinatorEntity(CoordinatorEntity[SnapcastUpdateCoordinator]):
     """Coordinator entity for Snapcast."""
 
+    _name_suffix: str
+
     def __init__(
         self, coordinator: SnapcastUpdateCoordinator, device_id: str
     ) -> None:
@@ -38,3 +40,15 @@ class SnapcastCoordinatorEntity(CoordinatorEntity[SnapcastUpdateCoordinator]):
         if not self.coordinator.last_update_success:
             return False
         return self._get_device() is not None
+
+    @property
+    def name(self) -> str:
+        """Entity name, tracking client renames on the server.
+
+        Computed on every state write so renaming a client in Snapcast is
+        reflected without recreating the entity.  A user-defined name in the
+        entity registry still takes precedence (HA core behavior).
+        """
+        device = self._get_device()
+        base = device.friendly_name if device else self._device_id
+        return f"{base} {self._name_suffix}"

@@ -152,7 +152,7 @@ If the Snapcast server restarts or the connection drops, the integration reconne
 
 ### HA 2026.x compatibility
 
-This integration is compatible with Home Assistant 2026.5+. The deprecated `extra_state_attributes` pattern is supplemented with dedicated `sensor` entities per client, following the modern HA architecture — but the attribute is still exposed for back-compat.
+This integration supports Home Assistant **2024.2.0 through current 2026.x releases**. The deprecated `extra_state_attributes` pattern is supplemented with dedicated `sensor` entities per client, following the modern HA architecture — but the attribute is still exposed for back-compat.
 
 ## Troubleshooting
 
@@ -162,6 +162,18 @@ This integration is compatible with Home Assistant 2026.5+. The deprecated `extr
 | "Cannot connect" on setup | Verify the host address and port. Try the server IP instead of hostname |
 | Volume not updating | The 45s polling fallback will pick it up. Push updates are instant |
 | Old official entities still visible after install | Restart Home Assistant. HA picks up the new domain registration on cold start |
+
+## Development
+
+The test suite runs on the official Home Assistant test harness and covers setup/unload, the disconnect → reconnect cycle (including a regression test ensuring the polling fallback never masks a disconnect), client renames, and all commands/services:
+
+```bash
+uv venv --python 3.13 .venv
+uv pip install --python .venv/bin/python -r requirements_test.txt
+.venv/bin/python -m pytest tests/
+```
+
+CI (GitHub Actions) runs the tests plus [HACS](https://github.com/hacs/action) and [hassfest](https://github.com/home-assistant/actions) validation on every push and PR.
 
 ## License
 

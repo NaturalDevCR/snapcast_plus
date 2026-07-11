@@ -74,6 +74,7 @@ class SnapcastLatencySensor(SnapcastCoordinatorEntity, SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_should_poll = False
+    _name_suffix = LATENCY_SUFFIX
 
     def __init__(
         self,
@@ -84,13 +85,6 @@ class SnapcastLatencySensor(SnapcastCoordinatorEntity, SensorEntity):
         super().__init__(coordinator, device_id)
 
         self._attr_unique_id = self.build_unique_id(self._host_id, device_id)
-
-        device = self._get_device()
-        self._attr_name = (
-            f"{device.friendly_name} {LATENCY_SUFFIX}"
-            if device
-            else f"{device_id} {LATENCY_SUFFIX}"
-        )
 
     @classmethod
     def build_unique_id(cls, host_id: str, device_id: str) -> str:

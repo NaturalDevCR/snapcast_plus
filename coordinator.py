@@ -113,8 +113,12 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         if self.hass.is_stopping:
             return
         if self._reconnect_task is None or self._reconnect_task.done():
-            self._reconnect_task = self.hass.async_create_task(
-                self._reconnect_loop()
+            # Background task: a long-lived retry loop must not block
+            # async_block_till_done() or delay HA shutdown; HA cancels
+            # background tasks automatically on stop.
+            self._reconnect_task = self.hass.async_create_background_task(
+                self._reconnect_loop(),
+                name=f"snapcast reconnect {self.host_id}",
             )
 
     async def _reconnect_loop(self) -> None:

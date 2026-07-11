@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".venv", "custom_components"]
+asyncio_mode = "auto"

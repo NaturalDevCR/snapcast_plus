@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: Tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install test dependencies
+        run: |
+          uv venv .venv
+          uv pip install --python .venv/bin/python -r requirements_test.txt
+
+      - name: Run pytest
+        run: .venv/bin/python -m pytest tests/ -v
+
+  hacs:
+    name: HACS validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: HACS Action
+        uses: hacs/action@main
+        with:
+          category: integration
+          ignore: brands
+
+  hassfest:
+    name: Hassfest validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # hassfest expects custom_components/<domain>/; this repo is flat
+      # (HACS content_in_root), so stage a copy in the expected layout.
+      - name: Stage integration layout
+        run: |
+          mkdir -p custom_components/snapcast
+          rsync -a --exclude '.git' --exclude 'tests' --exclude '.github' \
+            --exclude 'custom_components' ./ custom_components/snapcast/
+
+      - name: Hassfest
+        uses: home-assistant/actions/hassfest@master
