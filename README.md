@@ -125,6 +125,108 @@ Each Snapcast client appears as a `media_player` entity, exposing:
 - **Grouping** — join and unjoin players using Home Assistant's native speaker groups
 - Media progress bar with position tracking
 
+### Dynamic Snapcast group entities
+
+Each live Snapcast group also appears as a `media_player` entity. These are a
+direct view of groups currently reported by the Snapcast server, so they are
+useful for selecting a source or muting a specific, current playback group.
+
+Groups deliberately expose only:
+
+- Mute / unmute
+- Source selection
+
+They do **not** expose volume, snapshot, restore, latency, or grouping
+controls. Snapcast implements group volume by changing the volumes of its
+individual clients; it is not an independent zone-volume control and can
+produce surprising results in dashboards and automations. Use client entities
+when individual volume control is intended.
+
+#### What happens when Snapcast changes a group?
+
+Snapcast groups are dynamic: every client belongs to a group, and joining or
+splitting clients can destroy a group and create another one with a different
+ID. Snapcast Plus keeps a historical group entity automatically only when:
+
+1. Snapcast keeps the same physical group ID; or
+2. it replaces the ID but the new group has exactly the same complete set of
+   client IDs.
+
+It intentionally does not match a group by partial member overlap. For
+example, after splitting `Kitchen + Bedroom`, it would be unsafe to guess that
+the old entity should become either half. The old entity remains unavailable
+and the new live group receives its own entity instead.
+
+If you decide that an unavailable historical entity should represent a newly
+created group, use the explicit service below. It preserves the old entity ID,
+removes the new duplicate entity, and reloads only that Snapcast entry:
+
+```yaml
+action: snapcast.reconcile_group
+data:
+  old_entity_id: media_player.house_snapcast_group       # unavailable group
+  new_entity_id: media_player.living_room_snapcast_group # active group
+```
+
+Both entities must be Snapcast **group** entities belonging to the same
+Snapcast server. This operation is intentionally manual: it is the explicit
+choice required for ambiguous merges and splits.
+
+### Persistent Snapcast zones
+
+A zone is a stable, user-defined `media_player` made from one or more Snapcast
+**client** entities. Unlike a dynamic group, its identity does not depend on a
+Snapcast group ID. This is the recommended entity for concepts such as
+“Whole house”, “Downstairs”, or “Bedrooms”.
+
+At the moment an action is sent, the zone finds the distinct current Snapcast
+groups that contain its clients:
+
+- Mute is applied to every one of those groups.
+- Source selection is applied to every one, but only when that source exists
+  in all of them.
+- The zone reports a source only when all its current groups use the same
+  source, and its source list is the intersection of their available sources.
+
+Zones have mute and source controls only; they intentionally have no volume,
+snapshot, restore, or latency control. If the zone's clients later join,
+separate, or receive new Snapcast group IDs, the zone entity continues to work
+without reconciliation.
+
+Create a zone from the **client** entities you want it to cover:
+
+```yaml
+action: snapcast.create_zone
+data:
+  name: Whole house
+  clients:
+    - media_player.kitchen_snapcast_client
+    - media_player.bedroom_snapcast_client
+    - media_player.office_snapcast_client
+```
+
+The resulting entity is normally named `media_player.whole_house_snapcast_zone`.
+Rename it or replace its clients with:
+
+```yaml
+action: snapcast.update_zone
+data:
+  zone_entity_id: media_player.whole_house_snapcast_zone
+  name: House
+  clients:
+    - media_player.kitchen_snapcast_client
+    - media_player.bedroom_snapcast_client
+```
+
+Either `name` or `clients` is sufficient for an update. All listed clients must
+belong to the same Snapcast server entry. To remove a zone:
+
+```yaml
+action: snapcast.remove_zone
+data:
+  zone_entity_id: media_player.whole_house_snapcast_zone
+```
+
 ### Latency sensors
 
 Each Snapcast client also gets a dedicated `sensor` entity reporting its current latency in milliseconds. This enables latency-based automations (e.g., alert when a speaker falls out of sync) using standard HA sensor machinery.
@@ -136,6 +238,10 @@ Each Snapcast client also gets a dedicated `sensor` entity reporting its current
 | `snapcast.snapshot` | Take a snapshot of a client's current state |
 | `snapcast.restore` | Restore a previously saved snapshot |
 | `snapcast.set_latency` | Set client latency in milliseconds |
+| `snapcast.reconcile_group` | Explicitly attach an unavailable group entity to an active replacement group |
+| `snapcast.create_zone` | Create a persistent mute/source zone from Snapcast client entities |
+| `snapcast.update_zone` | Rename a persistent zone or replace its client entities |
+| `snapcast.remove_zone` | Remove a persistent zone |
 
 ### Auto-discovery
 
@@ -161,6 +267,8 @@ This integration supports Home Assistant **2024.2.0 through current 2026.x relea
 | Entities show as unavailable | Check that the Snapcast server is running and reachable on the configured host:port |
 | "Cannot connect" on setup | Verify the host address and port. Try the server IP instead of hostname |
 | Volume not updating | The 45s polling fallback will pick it up. Push updates are instant |
+| An old group is unavailable after clients join or split | This is safe by design when membership changed. Use the new group's entity, a persistent zone, or explicitly call `snapcast.reconcile_group` if it is the same logical area. |
+| I need a stable “whole house” control | Create a persistent zone with `snapcast.create_zone`; do not automate against a dynamic group entity. |
 | Old official entities still visible after install | Restart Home Assistant. HA picks up the new domain registration on cold start |
 
 ## Development

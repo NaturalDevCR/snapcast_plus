@@ -3,6 +3,7 @@
 import asyncio
 from datetime import timedelta
 import logging
+from uuid import uuid4
 
 from snapcast.control.server import Snapserver
 
@@ -63,6 +64,8 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         self.group_bindings: dict[str, str | None] = {}
         self.group_members: dict[str, frozenset[str]] = {}
         self._group_store = Store[dict](hass, 1, f"snapcast_groups.{config_entry.entry_id}")
+        self.zones: dict[str, dict[str, str | list[str]]] = {}
+        self._zone_store = Store[dict](hass, 1, f"snapcast_zones.{config_entry.entry_id}")
 
     @property
     def server(self) -> Snapserver | None:
@@ -81,6 +84,8 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
             self.group_members = {
                 key: frozenset(value) for key, value in saved.get("members", {}).items()
             }
+        if saved_zones := await self._zone_store.async_load():
+            self.zones = saved_zones.get("zones", {})
         await self._connect()
 
     def reconcile_groups(self) -> None:
@@ -96,15 +101,14 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         for physical, members in current.items():
             if physical in self.group_bindings.values():
                 continue
-            candidates = [logical for logical, old in self.group_members.items()
-                          if self.group_bindings.get(logical) is None and old & members]
-            exact = [logical for logical in candidates if self.group_members[logical] == members]
+            exact = [
+                logical
+                for logical, old_members in self.group_members.items()
+                if self.group_bindings.get(logical) is None
+                and old_members == members
+            ]
             if len(exact) == 1:
                 logical = exact[0]
-            elif candidates:
-                highest = max(len(self.group_members[item] & members) for item in candidates)
-                best = [item for item in candidates if len(self.group_members[item] & members) == highest]
-                logical = best[0] if len(best) == 1 else physical
             else:
                 logical = physical
             self.group_bindings[logical] = physical
@@ -113,6 +117,95 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
             "bindings": self.group_bindings,
             "members": {key: sorted(value) for key, value in self.group_members.items()},
         }))
+
+    async def async_reassign_group(
+        self, old_logical_id: str, new_logical_id: str
+    ) -> None:
+        """Move an active group binding to an unavailable logical identity."""
+        if self.group_bindings.get(old_logical_id) is not None:
+            raise ValueError("The old group is still bound to a live Snapcast group.")
+        physical_id = self.group_bindings.get(new_logical_id)
+        if physical_id is None:
+            raise ValueError("The new group is not currently available.")
+
+        self.group_bindings[old_logical_id] = physical_id
+        self.group_members[old_logical_id] = self.group_members[new_logical_id]
+        del self.group_bindings[new_logical_id]
+        self.group_members.pop(new_logical_id, None)
+        await self._group_store.async_save({
+            "bindings": self.group_bindings,
+            "members": {
+                key: sorted(members) for key, members in self.group_members.items()
+            },
+        })
+
+    def logical_group_id_from_unique_id(self, unique_id: str) -> str | None:
+        """Return the stored logical ID represented by a group unique ID."""
+        from .const import GROUP_PREFIX
+
+        prefix = f"{GROUP_PREFIX}{self.host_id}_"
+        if not unique_id.startswith(prefix):
+            return None
+        logical_id = unique_id.removeprefix(prefix)
+        return logical_id if logical_id in self.group_bindings else None
+
+    async def async_create_zone(self, name: str, client_ids: list[str]) -> str:
+        """Persist a user-defined zone and notify entity listeners."""
+        zone_id = uuid4().hex
+        self.zones[zone_id] = {
+            "name": name,
+            "client_ids": list(dict.fromkeys(client_ids)),
+        }
+        await self._async_save_zones()
+        self.async_update_listeners()
+        return zone_id
+
+    async def async_update_zone(
+        self, zone_id: str, name: str | None, client_ids: list[str] | None
+    ) -> None:
+        """Persist edits to a user-defined zone."""
+        zone = self.zones[zone_id]
+        if name is not None:
+            zone["name"] = name
+        if client_ids is not None:
+            zone["client_ids"] = list(dict.fromkeys(client_ids))
+        await self._async_save_zones()
+        self.async_update_listeners()
+
+    async def async_remove_zone(self, zone_id: str) -> None:
+        """Remove a persisted user-defined zone."""
+        del self.zones[zone_id]
+        await self._async_save_zones()
+
+    async def _async_save_zones(self) -> None:
+        """Write the current zone definitions to Home Assistant storage."""
+        await self._zone_store.async_save({"zones": self.zones})
+
+    def client_id_from_unique_id(self, unique_id: str) -> str | None:
+        """Return a current client ID represented by an entity unique ID."""
+        from .const import CLIENT_PREFIX
+
+        prefix = f"{CLIENT_PREFIX}{self.host_id}_"
+        if not unique_id.startswith(prefix):
+            return None
+        client_id = unique_id.removeprefix(prefix)
+        if self._server is None:
+            return None
+        try:
+            self._server.client(client_id)
+        except (KeyError, AttributeError):
+            return None
+        return client_id
+
+    def zone_id_from_unique_id(self, unique_id: str) -> str | None:
+        """Return the stored zone ID represented by a zone unique ID."""
+        from .const import ZONE_PREFIX
+
+        prefix = f"{ZONE_PREFIX}{self.host_id}_"
+        if not unique_id.startswith(prefix):
+            return None
+        zone_id = unique_id.removeprefix(prefix)
+        return zone_id if zone_id in self.zones else None
 
     async def _connect(self) -> None:
         """Create a fresh Snapserver and connect to the host."""

@@ -8,6 +8,7 @@ Snapserver.  This eliminates the class of bugs where entities stop
 responding after a server reconnect.
 """
 
+import asyncio
 from collections.abc import Mapping
 from datetime import datetime
 import logging
@@ -25,6 +26,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -33,6 +35,8 @@ from .const import (
     DOMAIN,
     GROUP_PREFIX,
     GROUP_SUFFIX,
+    ZONE_PREFIX,
+    ZONE_SUFFIX,
 )
 from .coordinator import SnapcastConfigEntry, SnapcastUpdateCoordinator
 from .entity import SnapcastCoordinatorEntity
@@ -61,6 +65,7 @@ async def async_setup_entry(
     coordinator = config_entry.runtime_data
     known_client_ids: set[str] = set()
     known_group_ids: set[str] = set()
+    known_zone_ids: set[str] = set()
 
     @callback
     def _update_clients() -> None:
@@ -78,8 +83,10 @@ async def async_setup_entry(
 
         group_ids_to_add = set(coordinator.group_bindings) - known_group_ids
         known_group_ids.update(group_ids_to_add)
+        zone_ids_to_add = set(coordinator.zones) - known_zone_ids
+        known_zone_ids.update(zone_ids_to_add)
 
-        if not (ids_to_add or ids_to_remove or group_ids_to_add):
+        if not (ids_to_add or ids_to_remove or group_ids_to_add or zone_ids_to_add):
             return
 
         if ids_to_add:
@@ -99,6 +106,12 @@ async def async_setup_entry(
             async_add_entities(
                 SnapcastGroupDevice(coordinator, group_id, coordinator.group_bindings)
                 for group_id in group_ids_to_add
+            )
+
+        if zone_ids_to_add:
+            async_add_entities(
+                SnapcastZoneDevice(coordinator, zone_id)
+                for zone_id in zone_ids_to_add
             )
 
         if ids_to_remove:
@@ -126,7 +139,9 @@ async def async_setup_entry(
 # ---------------------------------------------------------------------------
 
 
-class SnapcastGroupDevice(MediaPlayerEntity):
+class SnapcastGroupDevice(
+    CoordinatorEntity[SnapcastUpdateCoordinator], MediaPlayerEntity
+):
     """A Snapcast server group exposed as a media player.
 
     The entity stores only its group identifier and resolves the group on every
@@ -148,7 +163,7 @@ class SnapcastGroupDevice(MediaPlayerEntity):
         group_bindings: dict[str, str | None],
     ) -> None:
         """Initialise a group entity."""
-        self.coordinator = coordinator
+        super().__init__(coordinator)
         self._group_id = group_id
         self._group_bindings = group_bindings
         self._host_id = coordinator.host_id
@@ -217,6 +232,126 @@ class SnapcastGroupDevice(MediaPlayerEntity):
         if stream := group.streams_by_name().get(source):
             await group.set_stream(stream.identifier)
             self.async_write_ha_state()
+
+    async def async_snapshot(self) -> None:
+        raise HomeAssistantError("Snapshot can only be used with a Snapcast client.")
+
+    async def async_restore(self) -> None:
+        raise HomeAssistantError("Restore can only be used with a Snapcast client.")
+
+    async def async_set_latency(self, latency: int) -> None:
+        raise HomeAssistantError("Latency can only be set for a Snapcast client.")
+
+
+class SnapcastZoneDevice(
+    CoordinatorEntity[SnapcastUpdateCoordinator], MediaPlayerEntity
+):
+    """A stable user-defined zone spanning the current groups of its clients."""
+
+    _attr_should_poll = False
+    _attr_supported_features = (
+        MediaPlayerEntityFeature.VOLUME_MUTE
+        | MediaPlayerEntityFeature.SELECT_SOURCE
+    )
+    _attr_media_content_type = MediaType.MUSIC
+    _attr_device_class = MediaPlayerDeviceClass.SPEAKER
+
+    def __init__(self, coordinator: SnapcastUpdateCoordinator, zone_id: str) -> None:
+        """Initialise a zone entity from its persisted zone ID."""
+        super().__init__(coordinator)
+        self._zone_id = zone_id
+        self._attr_unique_id = self.build_unique_id(coordinator.host_id, zone_id)
+
+    @classmethod
+    def build_unique_id(cls, host_id: str, zone_id: str) -> str:
+        """Build the stable zone unique ID."""
+        return f"{ZONE_PREFIX}{host_id}_{zone_id}"
+
+    @property
+    def _zone(self) -> dict[str, str | list[str]] | None:
+        """Get the current persisted definition of this zone."""
+        return self.coordinator.zones.get(self._zone_id)
+
+    def _target_groups(self) -> list[Any]:
+        """Resolve each distinct live Snapcast group currently in this zone."""
+        zone = self._zone
+        server = self.coordinator.server
+        if zone is None or server is None:
+            return []
+
+        groups: dict[str, Any] = {}
+        for client_id in zone["client_ids"]:
+            try:
+                group = server.client(client_id).group
+            except (KeyError, AttributeError):
+                continue
+            if group is not None:
+                groups[group.identifier] = group
+        return list(groups.values())
+
+    @property
+    def available(self) -> bool:
+        """Return whether at least one selected client has a live group."""
+        return self.coordinator.last_update_success and bool(self._target_groups())
+
+    @property
+    def name(self) -> str:
+        """Return the configured zone name."""
+        zone = self._zone
+        return f"{zone['name'] if zone else self._zone_id} {ZONE_SUFFIX}"
+
+    @property
+    def state(self) -> MediaPlayerState | None:
+        groups = self._target_groups()
+        if not groups or self.is_volume_muted:
+            return MediaPlayerState.IDLE
+        statuses = {group.stream_status for group in groups}
+        if len(statuses) != 1:
+            return MediaPlayerState.IDLE
+        return STREAM_STATUS.get(statuses.pop(), MediaPlayerState.IDLE)
+
+    @property
+    def is_volume_muted(self) -> bool:
+        groups = self._target_groups()
+        return bool(groups) and all(group.muted for group in groups)
+
+    @property
+    def source(self) -> str | None:
+        groups = self._target_groups()
+        sources = {group.stream for group in groups}
+        return sources.pop() if len(sources) == 1 else None
+
+    @property
+    def source_list(self) -> list[str]:
+        groups = self._target_groups()
+        if not groups:
+            return []
+        common_sources = set(groups[0].streams_by_name())
+        for group in groups[1:]:
+            common_sources &= set(group.streams_by_name())
+        return sorted(common_sources)
+
+    async def async_mute_volume(self, mute: bool) -> None:
+        groups = self._target_groups()
+        if not groups:
+            raise ServiceValidationError(f"Zone '{self.entity_id}' is unavailable.")
+        await asyncio.gather(*(group.set_muted(mute) for group in groups))
+        self.async_write_ha_state()
+
+    async def async_select_source(self, source: str) -> None:
+        groups = self._target_groups()
+        streams = [group.streams_by_name().get(source) for group in groups]
+        if not groups or any(stream is None for stream in streams):
+            raise ServiceValidationError(
+                f"Source '{source}' is not available for every group in this zone."
+            )
+        await asyncio.gather(
+            *(group.set_stream(stream.identifier) for group, stream in zip(groups, streams))
+        )
+        self.async_write_ha_state()
+
+    async def async_set_volume_level(self, volume: float) -> None:
+        raise HomeAssistantError("Volume can only be set for a Snapcast client.")
 
     async def async_snapshot(self) -> None:
         raise HomeAssistantError("Snapshot can only be used with a Snapcast client.")

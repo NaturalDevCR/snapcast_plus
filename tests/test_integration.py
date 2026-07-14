@@ -18,14 +18,17 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.snapcast.const import DOMAIN
+from custom_components.snapcast.media_player import SnapcastGroupDevice
 
 from conftest import FakeSnapserver, make_group
 
 MEDIA_PLAYER_ID = "media_player.living_room_snapcast_client"
 SENSOR_ID = "sensor.living_room_latency"
 GROUP_ID = "media_player.living_room_snapcast_group"
+ZONE_ID = "media_player.casa_snapcast_zone"
 
 
 @pytest.fixture
@@ -54,6 +57,7 @@ def snapserver_factory(fake_server):
         else:
             server = FakeSnapserver()
             server.clients_by_id = dict(created[-1].clients_by_id)
+            server.groups_by_id = dict(created[-1].groups_by_id)
         created.append(server)
         return server
 
@@ -151,6 +155,155 @@ async def test_group_entity_rebinds_when_snapcast_changes_group_id(
         {"entity_id": GROUP_ID, "is_volume_muted": True}, blocking=True,
     )
     new_group.set_muted.assert_awaited_once_with(True)
+
+
+async def test_group_with_partial_member_overlap_gets_a_new_entity(
+    hass: HomeAssistant, config_entry, snapserver_factory, fake_server
+) -> None:
+    """A changed membership must not inherit a previous group identity."""
+    await setup_entry(hass, config_entry)
+
+    fake_server.groups_by_id = {
+        "group-b": make_group("group-b", client_ids=["aa:bb:cc", "dd:ee:ff"])
+    }
+    fake_server.on_update()
+    await hass.async_block_till_done()
+
+    assert config_entry.runtime_data.group_bindings == {
+        "group-a": None,
+        "group-b": "group-b",
+    }
+    assert hass.states.get(GROUP_ID).state == STATE_UNAVAILABLE
+
+
+async def test_reconcile_group_service_reuses_old_entity(
+    hass: HomeAssistant, config_entry, snapserver_factory, fake_server
+) -> None:
+    """An explicit choice moves a new group back to an unavailable entity."""
+    await setup_entry(hass, config_entry)
+
+    fake_server.groups_by_id = {
+        "group-b": make_group("group-b", client_ids=["aa:bb:cc", "dd:ee:ff"])
+    }
+    fake_server.on_update()
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    new_entity_id = registry.async_get_entity_id(
+        "media_player",
+        DOMAIN,
+        SnapcastGroupDevice.build_unique_id("127.0.0.1:1705", "group-b"),
+    )
+    assert new_entity_id is not None
+
+    await hass.services.async_call(
+        DOMAIN,
+        "reconcile_group",
+        {"old_entity_id": GROUP_ID, "new_entity_id": new_entity_id},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert config_entry.runtime_data.group_bindings == {"group-a": "group-b"}
+    assert registry.async_get(new_entity_id) is None
+    assert hass.states.get(GROUP_ID).state == "playing"
+
+
+async def test_zone_controls_current_groups_of_its_clients(
+    hass: HomeAssistant, config_entry, snapserver_factory, fake_server
+) -> None:
+    """A persistent zone follows its client to the group it is in now."""
+    await setup_entry(hass, config_entry)
+
+    await hass.services.async_call(
+        DOMAIN,
+        "create_zone",
+        {"name": "Casa", "clients": [MEDIA_PLAYER_ID]},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get(ZONE_ID) is not None
+    await hass.services.async_call(
+        "media_player",
+        "volume_mute",
+        {"entity_id": ZONE_ID, "is_volume_muted": True},
+        blocking=True,
+    )
+    fake_server.group("group-a").set_muted.assert_awaited_once_with(True)
+
+    replacement = make_group("group-b", client_ids=["aa:bb:cc"])
+    fake_server.client("aa:bb:cc").group = replacement
+    fake_server.groups_by_id = {"group-b": replacement}
+    fake_server.on_update()
+    await hass.async_block_till_done()
+
+    await hass.services.async_call(
+        "media_player",
+        "volume_mute",
+        {"entity_id": ZONE_ID, "is_volume_muted": False},
+        blocking=True,
+    )
+    replacement.set_muted.assert_awaited_once_with(False)
+
+
+async def test_zone_can_be_renamed_and_removed(
+    hass: HomeAssistant, config_entry, snapserver_factory, fake_server
+) -> None:
+    """Zone administration persists edits and removes the entity cleanly."""
+    await setup_entry(hass, config_entry)
+    await hass.services.async_call(
+        DOMAIN,
+        "create_zone",
+        {"name": "Casa", "clients": [MEDIA_PLAYER_ID]},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    await hass.services.async_call(
+        DOMAIN,
+        "update_zone",
+        {"zone_entity_id": ZONE_ID, "name": "Casa Principal"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(ZONE_ID).attributes["friendly_name"] == (
+        "Casa Principal Snapcast Zone"
+    )
+
+    await hass.services.async_call(
+        DOMAIN,
+        "remove_zone",
+        {"zone_entity_id": ZONE_ID},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(ZONE_ID) is None
+
+
+async def test_zone_selects_a_source_shared_by_its_current_groups(
+    hass: HomeAssistant, config_entry, snapserver_factory, fake_server
+) -> None:
+    """Zone source selection resolves the live group source by name."""
+    await setup_entry(hass, config_entry)
+    stream = MagicMock()
+    stream.identifier = "radio_id"
+    fake_server.group("group-a").streams_by_name.return_value = {"Radio": stream}
+
+    await hass.services.async_call(
+        DOMAIN,
+        "create_zone",
+        {"name": "Casa", "clients": [MEDIA_PLAYER_ID]},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        "media_player",
+        "select_source",
+        {"entity_id": ZONE_ID, "source": "Radio"},
+        blocking=True,
+    )
+
+    fake_server.group("group-a").set_stream.assert_awaited_once_with("radio_id")
 
 
 async def test_setup_retries_when_server_unreachable(
