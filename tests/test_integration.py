@@ -17,6 +17,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.snapcast.const import DOMAIN
 
@@ -106,11 +107,32 @@ async def test_setup_creates_controllable_group_entity(
 
     await hass.services.async_call(
         "media_player",
-        "volume_set",
-        {"entity_id": GROUP_ID, "volume_level": 0.37},
+        "volume_mute",
+        {"entity_id": GROUP_ID, "is_volume_muted": True},
         blocking=True,
     )
-    fake_server.group("group-a").set_volume.assert_awaited_once_with(37)
+    fake_server.group("group-a").set_muted.assert_awaited_once_with(True)
+
+
+async def test_group_entity_only_controls_mute_and_source(
+    hass: HomeAssistant, config_entry, snapserver_factory, fake_server
+) -> None:
+    """Groups must not expose operations that change client volumes."""
+    await setup_entry(hass, config_entry)
+
+    group = hass.states.get(GROUP_ID)
+    assert group is not None
+    assert "volume_level" not in group.attributes
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            "media_player", "volume_set",
+            {"entity_id": GROUP_ID, "volume_level": 0.25}, blocking=True,
+        )
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN, "snapshot", {"entity_id": GROUP_ID}, blocking=True
+        )
 
 
 async def test_group_entity_rebinds_when_snapcast_changes_group_id(
@@ -125,10 +147,10 @@ async def test_group_entity_rebinds_when_snapcast_changes_group_id(
 
     assert hass.states.get(GROUP_ID) is not None
     await hass.services.async_call(
-        "media_player", "volume_set",
-        {"entity_id": GROUP_ID, "volume_level": 0.25}, blocking=True,
+        "media_player", "volume_mute",
+        {"entity_id": GROUP_ID, "is_volume_muted": True}, blocking=True,
     )
-    new_group.set_volume.assert_awaited_once_with(25)
+    new_group.set_muted.assert_awaited_once_with(True)
 
 
 async def test_setup_retries_when_server_unreachable(

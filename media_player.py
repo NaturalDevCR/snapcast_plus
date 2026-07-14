@@ -136,7 +136,6 @@ class SnapcastGroupDevice(MediaPlayerEntity):
     _attr_should_poll = False
     _attr_supported_features = (
         MediaPlayerEntityFeature.VOLUME_MUTE
-        | MediaPlayerEntityFeature.VOLUME_SET
         | MediaPlayerEntityFeature.SELECT_SOURCE
     )
     _attr_media_content_type = MediaType.MUSIC
@@ -189,11 +188,6 @@ class SnapcastGroupDevice(MediaPlayerEntity):
         return STREAM_STATUS.get(group.stream_status, MediaPlayerState.IDLE)
 
     @property
-    def volume_level(self) -> float:
-        group = self._get_group()
-        return group.volume / 100 if group else 0.0
-
-    @property
     def is_volume_muted(self) -> bool:
         group = self._get_group()
         return bool(group and group.muted)
@@ -209,9 +203,7 @@ class SnapcastGroupDevice(MediaPlayerEntity):
         return list(group.streams_by_name()) if group else []
 
     async def async_set_volume_level(self, volume: float) -> None:
-        if group := self._get_group():
-            await group.set_volume(round(volume * 100))
-            self.async_write_ha_state()
+        raise HomeAssistantError("Volume can only be set for a Snapcast client.")
 
     async def async_mute_volume(self, mute: bool) -> None:
         if group := self._get_group():
@@ -227,13 +219,10 @@ class SnapcastGroupDevice(MediaPlayerEntity):
             self.async_write_ha_state()
 
     async def async_snapshot(self) -> None:
-        if group := self._get_group():
-            group.snapshot()
+        raise HomeAssistantError("Snapshot can only be used with a Snapcast client.")
 
     async def async_restore(self) -> None:
-        if group := self._get_group():
-            await group.restore()
-            self.async_write_ha_state()
+        raise HomeAssistantError("Restore can only be used with a Snapcast client.")
 
     async def async_set_latency(self, latency: int) -> None:
         raise HomeAssistantError("Latency can only be set for a Snapcast client.")
