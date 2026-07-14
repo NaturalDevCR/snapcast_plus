@@ -118,21 +118,24 @@ async def test_setup_creates_controllable_group_entity(
     fake_server.group("group-a").set_muted.assert_awaited_once_with(True)
 
 
-async def test_group_entity_only_controls_mute_and_source(
+async def test_group_volume_uses_snapcast_relative_adjustment(
     hass: HomeAssistant, config_entry, snapserver_factory, fake_server
 ) -> None:
-    """Groups must not expose operations that change client volumes."""
+    """Group volume delegates proportional adjustment to Snapcast itself."""
     await setup_entry(hass, config_entry)
 
     group = hass.states.get(GROUP_ID)
     assert group is not None
-    assert "volume_level" not in group.attributes
+    assert group.attributes["volume_level"] == 0.5
 
-    with pytest.raises(HomeAssistantError):
-        await hass.services.async_call(
-            "media_player", "volume_set",
-            {"entity_id": GROUP_ID, "volume_level": 0.25}, blocking=True,
-        )
+    await hass.services.async_call(
+        "media_player",
+        "volume_set",
+        {"entity_id": GROUP_ID, "volume_level": 0.37},
+        blocking=True,
+    )
+    fake_server.group("group-a").set_volume.assert_awaited_once_with(37)
+
     with pytest.raises(HomeAssistantError):
         await hass.services.async_call(
             DOMAIN, "snapshot", {"entity_id": GROUP_ID}, blocking=True
