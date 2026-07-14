@@ -20,10 +20,11 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.snapcast.const import DOMAIN
 
-from conftest import FakeSnapserver
+from conftest import FakeSnapserver, make_group
 
 MEDIA_PLAYER_ID = "media_player.living_room_snapcast_client"
 SENSOR_ID = "sensor.living_room_latency"
+GROUP_ID = "media_player.living_room_snapcast_group"
 
 
 @pytest.fixture
@@ -91,6 +92,43 @@ async def test_setup_creates_entities(
     sensor = hass.states.get(SENSOR_ID)
     assert sensor is not None
     assert sensor.state == "10"
+
+
+async def test_setup_creates_controllable_group_entity(
+    hass: HomeAssistant, config_entry, snapserver_factory, fake_server
+) -> None:
+    """Each Snapcast group is a controllable media player."""
+    await setup_entry(hass, config_entry)
+
+    group = hass.states.get(GROUP_ID)
+    assert group is not None
+    assert group.state == "playing"
+
+    await hass.services.async_call(
+        "media_player",
+        "volume_set",
+        {"entity_id": GROUP_ID, "volume_level": 0.37},
+        blocking=True,
+    )
+    fake_server.group("group-a").set_volume.assert_awaited_once_with(37)
+
+
+async def test_group_entity_rebinds_when_snapcast_changes_group_id(
+    hass: HomeAssistant, config_entry, snapserver_factory, fake_server
+) -> None:
+    """A group keeps its Home Assistant entity when Snapcast replaces its ID."""
+    await setup_entry(hass, config_entry)
+    new_group = make_group("group-b", client_ids=["aa:bb:cc"])
+    fake_server.groups_by_id = {"group-b": new_group}
+    fake_server.on_update()
+    await hass.async_block_till_done()
+
+    assert hass.states.get(GROUP_ID) is not None
+    await hass.services.async_call(
+        "media_player", "volume_set",
+        {"entity_id": GROUP_ID, "volume_level": 0.25}, blocking=True,
+    )
+    new_group.set_volume.assert_awaited_once_with(25)
 
 
 async def test_setup_retries_when_server_unreachable(

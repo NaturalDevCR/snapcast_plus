@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
+from homeassistant.helpers.storage import Store
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -59,6 +60,9 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         # poll, so it cannot be trusted as the "are we connected" signal.
         self._connected = False
         self.last_update_success = False
+        self.group_bindings: dict[str, str | None] = {}
+        self.group_members: dict[str, frozenset[str]] = {}
+        self._group_store = Store[dict](hass, 1, f"snapcast_groups.{config_entry.entry_id}")
 
     @property
     def server(self) -> Snapserver | None:
@@ -72,7 +76,43 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
 
     async def _async_setup(self) -> None:
         """Perform async setup for the coordinator."""
+        if saved := await self._group_store.async_load():
+            self.group_bindings = saved.get("bindings", {})
+            self.group_members = {
+                key: frozenset(value) for key, value in saved.get("members", {}).items()
+            }
         await self._connect()
+
+    def reconcile_groups(self) -> None:
+        """Rebind logical group IDs to current physical groups and persist them."""
+        if self._server is None:
+            return
+        current = {group.identifier: frozenset(group.clients) for group in self._server.groups}
+        for logical, physical in list(self.group_bindings.items()):
+            if physical in current:
+                self.group_members[logical] = current[physical]
+            else:
+                self.group_bindings[logical] = None
+        for physical, members in current.items():
+            if physical in self.group_bindings.values():
+                continue
+            candidates = [logical for logical, old in self.group_members.items()
+                          if self.group_bindings.get(logical) is None and old & members]
+            exact = [logical for logical in candidates if self.group_members[logical] == members]
+            if len(exact) == 1:
+                logical = exact[0]
+            elif candidates:
+                highest = max(len(self.group_members[item] & members) for item in candidates)
+                best = [item for item in candidates if len(self.group_members[item] & members) == highest]
+                logical = best[0] if len(best) == 1 else physical
+            else:
+                logical = physical
+            self.group_bindings[logical] = physical
+            self.group_members[logical] = members
+        self.hass.async_create_task(self._group_store.async_save({
+            "bindings": self.group_bindings,
+            "members": {key: sorted(value) for key, value in self.group_members.items()},
+        }))
 
     async def _connect(self) -> None:
         """Create a fresh Snapserver and connect to the host."""

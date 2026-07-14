@@ -27,7 +27,13 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import CLIENT_PREFIX, CLIENT_SUFFIX, DOMAIN
+from .const import (
+    CLIENT_PREFIX,
+    CLIENT_SUFFIX,
+    DOMAIN,
+    GROUP_PREFIX,
+    GROUP_SUFFIX,
+)
 from .coordinator import SnapcastConfigEntry, SnapcastUpdateCoordinator
 from .entity import SnapcastCoordinatorEntity
 
@@ -54,6 +60,7 @@ async def async_setup_entry(
 
     coordinator = config_entry.runtime_data
     known_client_ids: set[str] = set()
+    known_group_ids: set[str] = set()
 
     @callback
     def _update_clients() -> None:
@@ -61,6 +68,7 @@ async def async_setup_entry(
             return
 
         current_ids = {c.identifier for c in coordinator.server.clients}
+        coordinator.reconcile_groups()
 
         ids_to_add = current_ids - known_client_ids
         ids_to_remove = known_client_ids - current_ids
@@ -68,7 +76,10 @@ async def async_setup_entry(
         known_client_ids.difference_update(ids_to_remove)
         known_client_ids.update(ids_to_add)
 
-        if not (ids_to_add or ids_to_remove):
+        group_ids_to_add = set(coordinator.group_bindings) - known_group_ids
+        known_group_ids.update(group_ids_to_add)
+
+        if not (ids_to_add or ids_to_remove or group_ids_to_add):
             return
 
         if ids_to_add:
@@ -82,6 +93,12 @@ async def async_setup_entry(
             async_add_entities(
                 SnapcastClientDevice(coordinator, cid)
                 for cid in ids_to_add
+            )
+
+        if group_ids_to_add:
+            async_add_entities(
+                SnapcastGroupDevice(coordinator, group_id, coordinator.group_bindings)
+                for group_id in group_ids_to_add
             )
 
         if ids_to_remove:
@@ -107,6 +124,119 @@ async def async_setup_entry(
 # ---------------------------------------------------------------------------
 # Media player entity
 # ---------------------------------------------------------------------------
+
+
+class SnapcastGroupDevice(MediaPlayerEntity):
+    """A Snapcast server group exposed as a media player.
+
+    The entity stores only its group identifier and resolves the group on every
+    property access, just like client entities resolve fresh clients.
+    """
+
+    _attr_should_poll = False
+    _attr_supported_features = (
+        MediaPlayerEntityFeature.VOLUME_MUTE
+        | MediaPlayerEntityFeature.VOLUME_SET
+        | MediaPlayerEntityFeature.SELECT_SOURCE
+    )
+    _attr_media_content_type = MediaType.MUSIC
+    _attr_device_class = MediaPlayerDeviceClass.SPEAKER
+
+    def __init__(
+        self,
+        coordinator: SnapcastUpdateCoordinator,
+        group_id: str,
+        group_bindings: dict[str, str | None],
+    ) -> None:
+        """Initialise a group entity."""
+        self.coordinator = coordinator
+        self._group_id = group_id
+        self._group_bindings = group_bindings
+        self._host_id = coordinator.host_id
+        self._attr_unique_id = self.build_unique_id(self._host_id, group_id)
+
+    @classmethod
+    def build_unique_id(cls, host_id: str, group_id: str) -> str:
+        """Build the historical group unique ID."""
+        return f"{GROUP_PREFIX}{host_id}_{group_id}"
+
+    def _get_group(self):
+        server = self.coordinator.server
+        if server is None:
+            return None
+        try:
+            physical_id = self._group_bindings.get(self._group_id)
+            return server.group(physical_id) if physical_id else None
+        except (KeyError, AttributeError):
+            return None
+
+    @property
+    def available(self) -> bool:
+        """Return whether the coordinator and the group are available."""
+        return self.coordinator.last_update_success and self._get_group() is not None
+
+    @property
+    def name(self) -> str:
+        """Return the current Snapcast group name."""
+        group = self._get_group()
+        return f"{group.friendly_name if group else self._group_id} {GROUP_SUFFIX}"
+
+    @property
+    def state(self) -> MediaPlayerState | None:
+        group = self._get_group()
+        if group is None or group.muted:
+            return MediaPlayerState.IDLE
+        return STREAM_STATUS.get(group.stream_status, MediaPlayerState.IDLE)
+
+    @property
+    def volume_level(self) -> float:
+        group = self._get_group()
+        return group.volume / 100 if group else 0.0
+
+    @property
+    def is_volume_muted(self) -> bool:
+        group = self._get_group()
+        return bool(group and group.muted)
+
+    @property
+    def source(self) -> str | None:
+        group = self._get_group()
+        return group.stream if group else None
+
+    @property
+    def source_list(self) -> list[str]:
+        group = self._get_group()
+        return list(group.streams_by_name()) if group else []
+
+    async def async_set_volume_level(self, volume: float) -> None:
+        if group := self._get_group():
+            await group.set_volume(round(volume * 100))
+            self.async_write_ha_state()
+
+    async def async_mute_volume(self, mute: bool) -> None:
+        if group := self._get_group():
+            await group.set_muted(mute)
+            self.async_write_ha_state()
+
+    async def async_select_source(self, source: str) -> None:
+        group = self._get_group()
+        if group is None:
+            raise ServiceValidationError(f"Group '{self.entity_id}' is unavailable.")
+        if stream := group.streams_by_name().get(source):
+            await group.set_stream(stream.identifier)
+            self.async_write_ha_state()
+
+    async def async_snapshot(self) -> None:
+        if group := self._get_group():
+            group.snapshot()
+
+    async def async_restore(self) -> None:
+        if group := self._get_group():
+            await group.restore()
+            self.async_write_ha_state()
+
+    async def async_set_latency(self, latency: int) -> None:
+        raise HomeAssistantError("Latency can only be set for a Snapcast client.")
 
 
 class SnapcastClientDevice(SnapcastCoordinatorEntity, MediaPlayerEntity):
