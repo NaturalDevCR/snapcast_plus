@@ -37,6 +37,7 @@ class FakeSnapserver:
 
     def __init__(self) -> None:
         self.clients_by_id: dict[str, MagicMock] = {}
+        self.groups_by_id: dict[str, MagicMock] = {}
         self.on_update = None
         self.on_connect = None
         self.on_disconnect = None
@@ -48,8 +49,15 @@ class FakeSnapserver:
     def clients(self):
         return list(self.clients_by_id.values())
 
+    @property
+    def groups(self):
+        return list(self.groups_by_id.values())
+
     def client(self, identifier):
         return self.clients_by_id[identifier]
+
+    def group(self, identifier):
+        return self.groups_by_id[identifier]
 
     def stream(self, identifier):
         raise KeyError(identifier)
@@ -68,6 +76,8 @@ class FakeSnapserver:
 
 
 def make_group(
+    identifier: str = "group-a",
+    name: str = "Living Room",
     stream: str = "stream_a",
     stream_status: str = "playing",
     muted: bool = False,
@@ -75,14 +85,21 @@ def make_group(
 ) -> MagicMock:
     """Build a mock Snapgroup."""
     group = MagicMock()
+    group.identifier = identifier
+    group.friendly_name = name
     group.stream = stream
     group.stream_status = stream_status
     group.muted = muted
+    group.volume = 50
     group.clients = client_ids or []
     group.streams_by_name = MagicMock(return_value={})
     group.set_stream = AsyncMock()
     group.add_client = AsyncMock()
     group.remove_client = AsyncMock()
+    group.set_volume = AsyncMock()
+    group.set_muted = AsyncMock()
+    group.snapshot = MagicMock()
+    group.restore = AsyncMock()
     return group
 
 
@@ -120,4 +137,5 @@ def fake_server() -> FakeSnapserver:
     server = FakeSnapserver()
     client = make_client()
     server.clients_by_id[client.identifier] = client
+    server.groups_by_id[client.group.identifier] = client.group
     return server
