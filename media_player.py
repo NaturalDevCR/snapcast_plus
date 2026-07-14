@@ -151,6 +151,7 @@ class SnapcastGroupDevice(
     _attr_should_poll = False
     _attr_supported_features = (
         MediaPlayerEntityFeature.VOLUME_MUTE
+        | MediaPlayerEntityFeature.VOLUME_SET
         | MediaPlayerEntityFeature.SELECT_SOURCE
     )
     _attr_media_content_type = MediaType.MUSIC
@@ -208,6 +209,12 @@ class SnapcastGroupDevice(
         return bool(group and group.muted)
 
     @property
+    def volume_level(self) -> float | None:
+        """Return Snapcast's average volume for the group's clients."""
+        group = self._get_group()
+        return group.volume / 100 if group else None
+
+    @property
     def source(self) -> str | None:
         group = self._get_group()
         return group.stream if group else None
@@ -218,7 +225,11 @@ class SnapcastGroupDevice(
         return list(group.streams_by_name()) if group else []
 
     async def async_set_volume_level(self, volume: float) -> None:
-        raise HomeAssistantError("Volume can only be set for a Snapcast client.")
+        group = self._get_group()
+        if group is None:
+            raise ServiceValidationError(f"Group '{self.entity_id}' is unavailable.")
+        await group.set_volume(round(volume * 100))
+        self.async_write_ha_state()
 
     async def async_mute_volume(self, mute: bool) -> None:
         if group := self._get_group():

@@ -129,18 +129,27 @@ Each Snapcast client appears as a `media_player` entity, exposing:
 
 Each live Snapcast group also appears as a `media_player` entity. These are a
 direct view of groups currently reported by the Snapcast server, so they are
-useful for selecting a source or muting a specific, current playback group.
+useful for selecting a source, muting, or adjusting a specific, current
+playback group.
 
-Groups deliberately expose only:
+Groups expose:
 
+- Relative volume
 - Mute / unmute
 - Source selection
 
-They do **not** expose volume, snapshot, restore, latency, or grouping
-controls. Snapcast implements group volume by changing the volumes of its
-individual clients; it is not an independent zone-volume control and can
-produce surprising results in dashboards and automations. Use client entities
-when individual volume control is intended.
+The group volume slider is the average of its clients' current volume. Moving
+it delegates to Snapcast's native group-volume algorithm, which adjusts every
+client **relatively** instead of assigning all clients the same value. A group
+with clients at different levels therefore keeps those differences when its
+volume changes; Snapcast proportionally moves each client toward 0 or 100.
+
+The volume capability also makes Home Assistant show its native mute button in
+the media-player dialog. Home Assistant places that button inside the volume
+control rather than rendering a mute-only control.
+
+Groups do **not** expose snapshot, restore, latency, or grouping controls. Use
+client entities when individual, non-relative volume control is intended.
 
 #### What happens when Snapcast changes a group?
 
