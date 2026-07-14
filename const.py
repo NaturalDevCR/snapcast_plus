@@ -9,6 +9,8 @@ CLIENT_PREFIX = "snapcast_client_"
 CLIENT_SUFFIX = "Snapcast Client"
 GROUP_PREFIX = "snapcast_group_"
 GROUP_SUFFIX = "Snapcast Group"
+ZONE_PREFIX = "snapcast_zone_"
+ZONE_SUFFIX = "Snapcast Zone"
 LATENCY_SUFFIX = "Latency"
 
 PLATFORMS: list[Platform] = [Platform.MEDIA_PLAYER, Platform.SENSOR]
