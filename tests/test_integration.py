@@ -142,6 +142,48 @@ async def test_group_volume_uses_snapcast_relative_adjustment(
         )
 
 
+async def test_client_volume_push_updates_group_slider(
+    hass: HomeAssistant, config_entry, snapserver_factory, fake_server
+) -> None:
+    """A Client.OnVolumeChanged push (no full sync) refreshes the group slider.
+
+    python-snapcast delivers per-client/per-group changes through the
+    object's own callback (client.set_callback / group.set_callback), not
+    through the coordinator's set_on_update_callback (Server.OnUpdate only).
+    The coordinator must wire those object callbacks itself.
+    """
+    await setup_entry(hass, config_entry)
+    client = fake_server.client("aa:bb:cc")
+    group = fake_server.group("group-a")
+
+    client.volume = 80
+    group.volume = 80
+
+    callback = client.set_callback.call_args.args[0]
+    callback(client)
+    await hass.async_block_till_done()
+
+    updated = hass.states.get(GROUP_ID)
+    assert updated.attributes["volume_level"] == 0.8
+
+
+async def test_group_volume_push_updates_client_slider(
+    hass: HomeAssistant, config_entry, snapserver_factory, fake_server
+) -> None:
+    """A Group-driven per-client push refreshes that client's own slider."""
+    await setup_entry(hass, config_entry)
+    client = fake_server.client("aa:bb:cc")
+
+    client.volume = 65
+
+    callback = client.set_callback.call_args.args[0]
+    callback(client)
+    await hass.async_block_till_done()
+
+    updated = hass.states.get(MEDIA_PLAYER_ID)
+    assert updated.attributes["volume_level"] == 0.65
+
+
 async def test_group_entity_rebinds_when_snapcast_changes_group_id(
     hass: HomeAssistant, config_entry, snapserver_factory, fake_server
 ) -> None:

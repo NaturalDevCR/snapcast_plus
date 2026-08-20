@@ -216,10 +216,33 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         self._server.set_on_disconnect_callback(self._on_disconnect)
         await self._server.start()
         self._connected = True
+        self._wire_object_callbacks()
+
+    def _wire_object_callbacks(self) -> None:
+        """Subscribe to every client's and group's own push callback.
+
+        python-snapcast delivers fine-grained changes (Client.OnVolumeChanged,
+        Group.OnMute, ...) through the object's own callback, not through
+        set_on_update_callback (Server.OnUpdate only). Without this, an
+        individual client's volume changing does not refresh the group
+        slider and vice versa, since no coordinator listener ever fires.
+        """
+        if self._server is None:
+            return
+        for client in self._server.clients:
+            client.set_callback(self._on_object_update)
+        for group in self._server.groups:
+            group.set_callback(self._on_object_update)
+
+    def _on_object_update(self, _obj) -> None:
+        """Snapserver: a single client or group object changed (push)."""
+        self.last_update_success = True
+        self.async_update_listeners()
 
     def _on_update(self) -> None:
         """Snapserver: data updated (push)."""
         self.last_update_success = True
+        self._wire_object_callbacks()
         self.async_update_listeners()
 
     def _on_connect(self) -> None:
