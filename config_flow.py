@@ -4,11 +4,10 @@ import logging
 import socket
 
 import snapcast.control
-from snapcast.control.server import CONTROL_PORT
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PORT
+from snapcast.control.server import CONTROL_PORT
 
 from .const import DEFAULT_TITLE, DOMAIN
 

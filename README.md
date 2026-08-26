@@ -251,6 +251,7 @@ Each Snapcast client also gets a dedicated `sensor` entity reporting its current
 | `snapcast.create_zone` | Create a persistent mute/source zone from Snapcast client entities |
 | `snapcast.update_zone` | Rename a persistent zone or replace its client entities |
 | `snapcast.remove_zone` | Remove a persistent zone |
+| `snapcast.cleanup_groups` | Remove unavailable historical group entities |
 
 ### Auto-discovery
 
@@ -258,7 +259,13 @@ Clients that connect to or disconnect from the Snapcast server are automatically
 
 ### Reconnection
 
-If the Snapcast server restarts or the connection drops, the integration reconnects automatically with exponential backoff (1s → 2s → 4s → … → 60s max). All entities remain available and recover their state.
+If the Snapcast server restarts or the connection drops, the integration reconnects automatically with exponential backoff (1s → 2s → 4s → … → 60s max). Entities become unavailable while the server is unreachable, then recover their state automatically after reconnection.
+
+Use `snapcast.cleanup_groups` to explicitly remove unavailable historical group
+entities from the registry after a long period of group changes. This does not
+touch active groups. The integration also exposes Home Assistant diagnostics
+with redacted connection, entity, and persistence health information, and the
+config entry can be reconfigured from the UI without deleting it.
 
 ## Requirements
 
@@ -287,10 +294,11 @@ The test suite runs on the official Home Assistant test harness and covers setup
 ```bash
 uv venv --python 3.13 .venv
 uv pip install --python .venv/bin/python -r requirements_test.txt
-.venv/bin/python -m pytest tests/
+.venv/bin/python -m pytest tests/ --cov=. --cov-report=term-missing --cov-fail-under=85
+.venv/bin/ruff check .
 ```
 
-CI (GitHub Actions) runs the tests plus [HACS](https://github.com/hacs/action) validation on every push and PR. Hassfest is not run: it rejects (by design) custom integrations that register a core domain, which is exactly what this drop-in replacement does.
+CI (GitHub Actions) runs the tests with coverage, Ruff, plus [HACS](https://github.com/hacs/action) validation on every push and PR. Hassfest is not run: it rejects (by design) custom integrations that register a core domain, which is exactly what this drop-in replacement does.
 
 ## License
 

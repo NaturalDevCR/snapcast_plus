@@ -1,12 +1,12 @@
 """Snapcast services."""
 
 import voluptuous as vol
-
 from homeassistant.components.media_player import DOMAIN as MEDIA_PLAYER_DOMAIN
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers import config_validation as cv, service
+from homeassistant.helpers import service
 
 from .const import CLIENT_PREFIX, DOMAIN, GROUP_PREFIX, ZONE_PREFIX
 

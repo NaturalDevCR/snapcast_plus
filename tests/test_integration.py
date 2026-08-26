@@ -7,11 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    async_fire_time_changed,
-)
-
+from conftest import FakeSnapserver, make_group
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import (
     CONF_HOST,
@@ -21,14 +17,16 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.snapcast.const import DOMAIN
 from custom_components.snapcast.diagnostics import (
     async_get_config_entry_diagnostics,
 )
 from custom_components.snapcast.media_player import SnapcastGroupDevice
-
-from conftest import FakeSnapserver, make_group
 
 MEDIA_PLAYER_ID = "media_player.living_room_snapcast_client"
 SENSOR_ID = "sensor.living_room_latency"

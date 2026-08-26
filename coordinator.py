@@ -1,20 +1,19 @@
 """Data update coordinator for Snapcast server with auto-reconnection."""
 
 import asyncio
-from datetime import timedelta
 import logging
+from datetime import timedelta
 from uuid import uuid4
-
-from snapcast.control.server import Snapserver
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
-from homeassistant.helpers.storage import Store
+from snapcast.control.server import Snapserver
 
 _LOGGER = logging.getLogger(__name__)
 
