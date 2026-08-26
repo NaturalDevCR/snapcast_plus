@@ -124,6 +124,10 @@
           "name": "Zone entity"
         }
       }
+    },
+    "cleanup_groups": {
+      "description": "Removes unavailable historical Snapcast group entities from configured servers.",
+      "name": "Clean up groups"
     }
   }
 }

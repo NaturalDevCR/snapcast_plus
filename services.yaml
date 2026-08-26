@@ -91,3 +91,6 @@ remove_zone:
           filter:
             - integration: snapcast
               domain: media_player
+
+cleanup_groups:
+  description: Remove unavailable historical Snapcast group entities from configured servers.

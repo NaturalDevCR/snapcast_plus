@@ -259,6 +259,35 @@ async def test_reconcile_group_service_reuses_old_entity(
     assert hass.states.get(GROUP_ID).state == "playing"
 
 
+async def test_cleanup_groups_removes_only_historical_entities(
+    hass: HomeAssistant, config_entry, snapserver_factory, fake_server
+) -> None:
+    """Explicit cleanup prunes unavailable group history, not live groups."""
+    await setup_entry(hass, config_entry)
+
+    fake_server.groups_by_id = {
+        "group-b": make_group("group-b", client_ids=["aa:bb:cc", "dd:ee:ff"])
+    }
+    fake_server.on_update()
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    new_entity_id = registry.async_get_entity_id(
+        "media_player",
+        DOMAIN,
+        SnapcastGroupDevice.build_unique_id("127.0.0.1:1705", "group-b"),
+    )
+    assert new_entity_id is not None
+    assert registry.async_get(GROUP_ID) is not None
+
+    await hass.services.async_call(DOMAIN, "cleanup_groups", blocking=True)
+    await hass.async_block_till_done()
+
+    assert config_entry.runtime_data.group_bindings == {"group-b": "group-b"}
+    assert registry.async_get(GROUP_ID) is None
+    assert registry.async_get(new_entity_id) is not None
+
+
 async def test_zone_controls_current_groups_of_its_clients(
     hass: HomeAssistant, config_entry, snapserver_factory, fake_server
 ) -> None:
@@ -586,6 +615,7 @@ def test_service_metadata_describes_extended_services() -> None:
         "create_zone",
         "update_zone",
         "remove_zone",
+        "cleanup_groups",
     } <= metadata.keys()
     assert metadata["reconcile_group"]["fields"]["old_entity_id"]["required"]
     assert metadata["create_zone"]["fields"]["clients"]["required"]
