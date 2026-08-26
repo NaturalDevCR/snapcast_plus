@@ -23,3 +23,71 @@ set_latency:
           min: 1
           max: 1000
           unit_of_measurement: "ms"
+
+reconcile_group:
+  description: Reassign a live Snapcast group to an unavailable historical group entity.
+  fields:
+    old_entity_id:
+      required: true
+      selector:
+        entity:
+          filter:
+            - integration: snapcast
+              domain: media_player
+    new_entity_id:
+      required: true
+      selector:
+        entity:
+          filter:
+            - integration: snapcast
+              domain: media_player
+
+create_zone:
+  description: Create a persistent mute and source zone from Snapcast clients.
+  fields:
+    name:
+      required: true
+      selector:
+        text:
+    clients:
+      required: true
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - integration: snapcast
+              domain: media_player
+
+update_zone:
+  description: Rename a Snapcast zone or replace its client entities.
+  fields:
+    zone_entity_id:
+      required: true
+      selector:
+        entity:
+          filter:
+            - integration: snapcast
+              domain: media_player
+    name:
+      required: false
+      selector:
+        text:
+    clients:
+      required: false
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - integration: snapcast
+              domain: media_player
+
+remove_zone:
+  description: Remove a persistent Snapcast zone.
+  fields:
+    zone_entity_id:
+      required: true
+      selector:
+        entity:
+          filter:
+            - integration: snapcast
+              domain: media_player

@@ -2,9 +2,11 @@
 
 import asyncio
 from datetime import timedelta
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
@@ -541,3 +543,22 @@ async def test_snapshot_and_restore_services(
         DOMAIN, "restore", {"entity_id": MEDIA_PLAYER_ID}, blocking=True
     )
     client.restore.assert_awaited_once()
+
+
+def test_service_metadata_describes_extended_services() -> None:
+    """Every registered Snapcast service is discoverable in the service UI."""
+    metadata = yaml.safe_load(
+        (Path(__file__).parents[1] / "services.yaml").read_text()
+    )
+
+    assert {
+        "snapshot",
+        "restore",
+        "set_latency",
+        "reconcile_group",
+        "create_zone",
+        "update_zone",
+        "remove_zone",
+    } <= metadata.keys()
+    assert metadata["reconcile_group"]["fields"]["old_entity_id"]["required"]
+    assert metadata["create_zone"]["fields"]["clients"]["required"]

@@ -57,6 +57,62 @@
     "snapshot": {
       "description": "Takes a snapshot of what is currently playing on a media player.",
       "name": "Snapshot"
+    },
+    "reconcile_group": {
+      "description": "Reassigns a live Snapcast group to an unavailable historical group entity.",
+      "name": "Reconcile group",
+      "fields": {
+        "old_entity_id": {
+          "description": "Unavailable historical Snapcast group entity.",
+          "name": "Old group entity"
+        },
+        "new_entity_id": {
+          "description": "Currently active Snapcast group entity.",
+          "name": "New group entity"
+        }
+      }
+    },
+    "create_zone": {
+      "description": "Creates a persistent mute and source zone from Snapcast clients.",
+      "name": "Create zone",
+      "fields": {
+        "name": {
+          "description": "Display name for the new zone.",
+          "name": "Name"
+        },
+        "clients": {
+          "description": "Snapcast client entities included in the zone.",
+          "name": "Clients"
+        }
+      }
+    },
+    "update_zone": {
+      "description": "Renames a Snapcast zone or replaces its client entities.",
+      "name": "Update zone",
+      "fields": {
+        "zone_entity_id": {
+          "description": "The persistent zone to update.",
+          "name": "Zone entity"
+        },
+        "name": {
+          "description": "New display name, if changing the name.",
+          "name": "Name"
+        },
+        "clients": {
+          "description": "Replacement Snapcast client entities, if changing membership.",
+          "name": "Clients"
+        }
+      }
+    },
+    "remove_zone": {
+      "description": "Removes a persistent Snapcast zone.",
+      "name": "Remove zone",
+      "fields": {
+        "zone_entity_id": {
+          "description": "The persistent zone to remove.",
+          "name": "Zone entity"
+        }
+      }
     }
   }
 }
