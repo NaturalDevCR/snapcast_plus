@@ -18,6 +18,17 @@
         },
         "description": "Please enter your server connection details",
         "title": "Connect to Snapcast"
+      },
+      "reconfigure": {
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        },
+        "data_description": {
+          "host": "The hostname or IP address of your Snapcast server."
+        },
+        "description": "Update your server connection details",
+        "title": "Reconfigure Snapcast"
       }
     }
   },
