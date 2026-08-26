@@ -73,6 +73,16 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         return self._server
 
     @property
+    def connected(self) -> bool:
+        """Return whether the coordinator considers the server connected."""
+        return self._connected
+
+    @property
+    def reconnect_delay(self) -> int:
+        """Return the current exponential reconnect delay in seconds."""
+        return self._reconnect_delay
+
+    @property
     def host_id(self) -> str:
         """Unique host identifier: host:port."""
         return f"{self.host}:{self.port}"

@@ -23,6 +23,9 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.snapcast.const import DOMAIN
+from custom_components.snapcast.diagnostics import (
+    async_get_config_entry_diagnostics,
+)
 from custom_components.snapcast.media_player import SnapcastGroupDevice
 
 from conftest import FakeSnapserver, make_group
@@ -461,6 +464,30 @@ async def test_client_rename_is_reflected(
 
     state = hass.states.get(MEDIA_PLAYER_ID)
     assert state.attributes["friendly_name"] == "Kitchen Snapcast Client"
+
+
+async def test_diagnostics_redact_snapcast_identifiers(
+    hass: HomeAssistant, config_entry, snapserver_factory, fake_server
+) -> None:
+    """Diagnostics expose health counts without host or device identifiers."""
+    await setup_entry(hass, config_entry)
+
+    diagnostics = await async_get_config_entry_diagnostics(hass, config_entry)
+
+    assert diagnostics["connection"] == {
+        "connected": True,
+        "last_update_success": True,
+        "reconnect_delay": 1,
+    }
+    assert diagnostics["entities"] == {"clients": 1, "groups": 1}
+    assert diagnostics["persistence"] == {
+        "zones": 0,
+        "group_bindings": 1,
+        "historical_groups": 0,
+    }
+    serialized = repr(diagnostics)
+    assert "127.0.0.1" not in serialized
+    assert "aa:bb:cc" not in serialized
 
 
 # ---------------------------------------------------------------------------
