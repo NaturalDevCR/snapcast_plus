@@ -1,20 +1,19 @@
 """Data update coordinator for Snapcast server with auto-reconnection."""
 
 import asyncio
-from datetime import timedelta
 import logging
+from datetime import timedelta
 from uuid import uuid4
-
-from snapcast.control.server import Snapserver
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
-from homeassistant.helpers.storage import Store
+from snapcast.control.server import Snapserver
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,6 +70,16 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
     def server(self) -> Snapserver | None:
         """Get the Snapserver object."""
         return self._server
+
+    @property
+    def connected(self) -> bool:
+        """Return whether the coordinator considers the server connected."""
+        return self._connected
+
+    @property
+    def reconnect_delay(self) -> int:
+        """Return the current exponential reconnect delay in seconds."""
+        return self._reconnect_delay
 
     @property
     def host_id(self) -> str:
@@ -138,6 +147,28 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
                 key: sorted(members) for key, members in self.group_members.items()
             },
         })
+
+    async def async_cleanup_groups(self) -> list[str]:
+        """Delete unavailable historical group identities from storage."""
+        removed = [
+            logical_id
+            for logical_id, physical_id in self.group_bindings.items()
+            if physical_id is None
+        ]
+        if not removed:
+            return []
+
+        for logical_id in removed:
+            self.group_bindings.pop(logical_id, None)
+            self.group_members.pop(logical_id, None)
+        await self._group_store.async_save({
+            "bindings": self.group_bindings,
+            "members": {
+                key: sorted(members) for key, members in self.group_members.items()
+            },
+        })
+        self.async_update_listeners()
+        return removed
 
     def logical_group_id_from_unique_id(self, unique_id: str) -> str | None:
         """Return the stored logical ID represented by a group unique ID."""

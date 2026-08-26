@@ -2,14 +2,12 @@
 
 import asyncio
 from datetime import timedelta
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    async_fire_time_changed,
-)
-
+import yaml
+from conftest import FakeSnapserver, make_group
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import (
     CONF_HOST,
@@ -19,11 +17,16 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.snapcast.const import DOMAIN
+from custom_components.snapcast.diagnostics import (
+    async_get_config_entry_diagnostics,
+)
 from custom_components.snapcast.media_player import SnapcastGroupDevice
-
-from conftest import FakeSnapserver, make_group
 
 MEDIA_PLAYER_ID = "media_player.living_room_snapcast_client"
 SENSOR_ID = "sensor.living_room_latency"
@@ -254,6 +257,35 @@ async def test_reconcile_group_service_reuses_old_entity(
     assert hass.states.get(GROUP_ID).state == "playing"
 
 
+async def test_cleanup_groups_removes_only_historical_entities(
+    hass: HomeAssistant, config_entry, snapserver_factory, fake_server
+) -> None:
+    """Explicit cleanup prunes unavailable group history, not live groups."""
+    await setup_entry(hass, config_entry)
+
+    fake_server.groups_by_id = {
+        "group-b": make_group("group-b", client_ids=["aa:bb:cc", "dd:ee:ff"])
+    }
+    fake_server.on_update()
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    new_entity_id = registry.async_get_entity_id(
+        "media_player",
+        DOMAIN,
+        SnapcastGroupDevice.build_unique_id("127.0.0.1:1705", "group-b"),
+    )
+    assert new_entity_id is not None
+    assert registry.async_get(GROUP_ID) is not None
+
+    await hass.services.async_call(DOMAIN, "cleanup_groups", blocking=True)
+    await hass.async_block_till_done()
+
+    assert config_entry.runtime_data.group_bindings == {"group-b": "group-b"}
+    assert registry.async_get(GROUP_ID) is None
+    assert registry.async_get(new_entity_id) is not None
+
+
 async def test_zone_controls_current_groups_of_its_clients(
     hass: HomeAssistant, config_entry, snapserver_factory, fake_server
 ) -> None:
@@ -461,6 +493,30 @@ async def test_client_rename_is_reflected(
     assert state.attributes["friendly_name"] == "Kitchen Snapcast Client"
 
 
+async def test_diagnostics_redact_snapcast_identifiers(
+    hass: HomeAssistant, config_entry, snapserver_factory, fake_server
+) -> None:
+    """Diagnostics expose health counts without host or device identifiers."""
+    await setup_entry(hass, config_entry)
+
+    diagnostics = await async_get_config_entry_diagnostics(hass, config_entry)
+
+    assert diagnostics["connection"] == {
+        "connected": True,
+        "last_update_success": True,
+        "reconnect_delay": 1,
+    }
+    assert diagnostics["entities"] == {"clients": 1, "groups": 1}
+    assert diagnostics["persistence"] == {
+        "zones": 0,
+        "group_bindings": 1,
+        "historical_groups": 0,
+    }
+    serialized = repr(diagnostics)
+    assert "127.0.0.1" not in serialized
+    assert "aa:bb:cc" not in serialized
+
+
 # ---------------------------------------------------------------------------
 # Commands and services
 # ---------------------------------------------------------------------------
@@ -541,3 +597,23 @@ async def test_snapshot_and_restore_services(
         DOMAIN, "restore", {"entity_id": MEDIA_PLAYER_ID}, blocking=True
     )
     client.restore.assert_awaited_once()
+
+
+def test_service_metadata_describes_extended_services() -> None:
+    """Every registered Snapcast service is discoverable in the service UI."""
+    metadata = yaml.safe_load(
+        (Path(__file__).parents[1] / "services.yaml").read_text()
+    )
+
+    assert {
+        "snapshot",
+        "restore",
+        "set_latency",
+        "reconcile_group",
+        "create_zone",
+        "update_zone",
+        "remove_zone",
+        "cleanup_groups",
+    } <= metadata.keys()
+    assert metadata["reconcile_group"]["fields"]["old_entity_id"]["required"]
+    assert metadata["create_zone"]["fields"]["clients"]["required"]

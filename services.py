@@ -1,12 +1,12 @@
 """Snapcast services."""
 
 import voluptuous as vol
-
 from homeassistant.components.media_player import DOMAIN as MEDIA_PLAYER_DOMAIN
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers import config_validation as cv, service
+from homeassistant.helpers import service
 
 from .const import CLIENT_PREFIX, DOMAIN, GROUP_PREFIX, ZONE_PREFIX
 
@@ -17,6 +17,7 @@ SERVICE_RECONCILE_GROUP = "reconcile_group"
 SERVICE_CREATE_ZONE = "create_zone"
 SERVICE_UPDATE_ZONE = "update_zone"
 SERVICE_REMOVE_ZONE = "remove_zone"
+SERVICE_CLEANUP_GROUPS = "cleanup_groups"
 
 ATTR_LATENCY = "latency"
 ATTR_OLD_ENTITY_ID = "old_entity_id"
@@ -210,4 +211,28 @@ def async_setup_services(hass: HomeAssistant) -> None:
         SERVICE_REMOVE_ZONE,
         async_remove_zone,
         schema=vol.Schema({vol.Required(ATTR_ZONE_ENTITY_ID): cv.entity_id}),
+    )
+
+    async def async_cleanup_groups(_call: ServiceCall) -> None:
+        """Remove unavailable historical group entities from every entry."""
+        registry = er.async_get(hass)
+        for config_entry in hass.config_entries.async_entries(DOMAIN):
+            if not config_entry.runtime_data:
+                continue
+            coordinator = config_entry.runtime_data
+            removed = await coordinator.async_cleanup_groups()
+            for logical_id in removed:
+                unique_id = f"{GROUP_PREFIX}{coordinator.host_id}_{logical_id}"
+                if entity_id := registry.async_get_entity_id(
+                    MEDIA_PLAYER_DOMAIN, DOMAIN, unique_id
+                ):
+                    registry.async_remove(entity_id)
+            if removed:
+                await hass.config_entries.async_reload(config_entry.entry_id)
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CLEANUP_GROUPS,
+        async_cleanup_groups,
+        schema=vol.Schema({}),
     )

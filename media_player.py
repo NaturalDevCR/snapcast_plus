@@ -9,13 +9,15 @@ responding after a server reconnect.
 """
 
 import asyncio
+import logging
 from collections.abc import Mapping
 from datetime import datetime
-import logging
 from typing import Any
 
 from homeassistant.components.media_player import (
     DOMAIN as MEDIA_PLAYER_DOMAIN,
+)
+from homeassistant.components.media_player import (
     MediaPlayerDeviceClass,
     MediaPlayerEntity,
     MediaPlayerEntityFeature,

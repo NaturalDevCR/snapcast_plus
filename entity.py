@@ -1,8 +1,7 @@
 """Base entity for Snapcast."""
 
-from snapcast.control.client import Snapclient
-
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from snapcast.control.client import Snapclient
 
 from .coordinator import SnapcastUpdateCoordinator
 

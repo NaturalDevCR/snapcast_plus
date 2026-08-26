@@ -4,11 +4,10 @@ import logging
 import socket
 
 import snapcast.control
-from snapcast.control.server import CONTROL_PORT
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PORT
+from snapcast.control.server import CONTROL_PORT
 
 from .const import DEFAULT_TITLE, DOMAIN
 
@@ -37,16 +36,12 @@ class SnapcastConfigFlow(ConfigFlow, domain=DOMAIN):
             host = user_input[CONF_HOST]
             port = user_input[CONF_PORT]
 
-            try:
-                client = await snapcast.control.create_server(
-                    self.hass.loop, host, port, reconnect=False
-                )
-            except socket.gaierror:
+            error = await self._async_validate_connection(host, port)
+            if error == "invalid_host":
                 errors["base"] = "invalid_host"
-            except OSError:
+            elif error == "cannot_connect":
                 errors["base"] = "cannot_connect"
             else:
-                client.stop()
                 return self.async_create_entry(
                     title=DEFAULT_TITLE, data=user_input
                 )
@@ -56,3 +51,49 @@ class SnapcastConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=SNAPCAST_SCHEMA,
             errors=errors,
         )
+
+    async def async_step_reconfigure(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        """Handle updating the host and port of an existing entry."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            error = await self._async_validate_connection(
+                user_input[CONF_HOST], user_input[CONF_PORT]
+            )
+            if error is None:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates=user_input,
+                    reason="reconfigure_success",
+                )
+            errors["base"] = error
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_HOST, default=entry.data.get(CONF_HOST, "")
+                    ): str,
+                    vol.Required(
+                        CONF_PORT, default=entry.data.get(CONF_PORT, CONTROL_PORT)
+                    ): int,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def _async_validate_connection(self, host: str, port: int) -> str | None:
+        """Probe a Snapcast endpoint and return a translated error key."""
+        try:
+            client = await snapcast.control.create_server(
+                self.hass.loop, host, port, reconnect=False
+            )
+        except socket.gaierror:
+            return "invalid_host"
+        except OSError:
+            return "cannot_connect"
+        client.stop()
+        return None
