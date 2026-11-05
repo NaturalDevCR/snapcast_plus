@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.0 — 2026-11-05
+
+- Query authoritative server state every 15 seconds with a 10-second deadline.
+- Recover silent connections and clean up failed or cancelled startup attempts.
+- Mark connected clients unavailable when their lastSeen stops advancing for 60 seconds.
+- Fix discovery callbacks for new clients and ignore callbacks from replaced connections.
+- Await reconnect cancellation during unload and bound configuration probes.
+- Add redacted response/disconnect timestamps, retry counts, and stale-client diagnostics.
+- Preserve entity IDs and explicit offline-client states.
+
+
 ## 1.4.0 — 2026-08-26
 
 ### Added

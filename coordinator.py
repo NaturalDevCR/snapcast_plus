@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from contextlib import suppress
 from datetime import timedelta
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
+from homeassistant.util import dt as dt_util
 from snapcast.control.server import Snapserver
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,7 +22,9 @@ _LOGGER = logging.getLogger(__name__)
 type SnapcastConfigEntry = ConfigEntry["SnapcastUpdateCoordinator"]
 
 MAX_RECONNECT_DELAY = 60
-POLL_INTERVAL_SECONDS = 45
+POLL_INTERVAL_SECONDS = 15
+CONNECTION_TIMEOUT_SECONDS = 10
+CLIENT_STALE_SECONDS = 60
 
 
 class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
@@ -59,12 +63,22 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         # DataUpdateCoordinator overwrites last_update_success after every
         # poll, so it cannot be trusted as the "are we connected" signal.
         self._connected = False
+        self._stopped = False
+        self._client_seen: dict[str, tuple[tuple[int, int], float]] = {}
+        self.last_response_time: str | None = None
+        self.last_disconnect_time: str | None = None
+        self.last_connection_error: str | None = None
+        self.reconnect_attempts = 0
         self.last_update_success = False
         self.group_bindings: dict[str, str | None] = {}
         self.group_members: dict[str, frozenset[str]] = {}
-        self._group_store = Store[dict](hass, 1, f"snapcast_groups.{config_entry.entry_id}")
+        self._group_store = Store[dict](
+            hass, 1, f"snapcast_groups.{config_entry.entry_id}"
+        )
         self.zones: dict[str, dict[str, str | list[str]]] = {}
-        self._zone_store = Store[dict](hass, 1, f"snapcast_zones.{config_entry.entry_id}")
+        self._zone_store = Store[dict](
+            hass, 1, f"snapcast_zones.{config_entry.entry_id}"
+        )
 
     @property
     def server(self) -> Snapserver | None:
@@ -101,7 +115,9 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         """Rebind logical group IDs to current physical groups and persist them."""
         if self._server is None:
             return
-        current = {group.identifier: frozenset(group.clients) for group in self._server.groups}
+        current = {
+            group.identifier: frozenset(group.clients) for group in self._server.groups
+        }
         for logical, physical in list(self.group_bindings.items()):
             if physical in current:
                 self.group_members[logical] = current[physical]
@@ -113,8 +129,7 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
             exact = [
                 logical
                 for logical, old_members in self.group_members.items()
-                if self.group_bindings.get(logical) is None
-                and old_members == members
+                if self.group_bindings.get(logical) is None and old_members == members
             ]
             if len(exact) == 1:
                 logical = exact[0]
@@ -122,10 +137,16 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
                 logical = physical
             self.group_bindings[logical] = physical
             self.group_members[logical] = members
-        self.hass.async_create_task(self._group_store.async_save({
-            "bindings": self.group_bindings,
-            "members": {key: sorted(value) for key, value in self.group_members.items()},
-        }))
+        self.hass.async_create_task(
+            self._group_store.async_save(
+                {
+                    "bindings": self.group_bindings,
+                    "members": {
+                        key: sorted(value) for key, value in self.group_members.items()
+                    },
+                }
+            )
+        )
 
     async def async_reassign_group(
         self, old_logical_id: str, new_logical_id: str
@@ -141,12 +162,14 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         self.group_members[old_logical_id] = self.group_members[new_logical_id]
         del self.group_bindings[new_logical_id]
         self.group_members.pop(new_logical_id, None)
-        await self._group_store.async_save({
-            "bindings": self.group_bindings,
-            "members": {
-                key: sorted(members) for key, members in self.group_members.items()
-            },
-        })
+        await self._group_store.async_save(
+            {
+                "bindings": self.group_bindings,
+                "members": {
+                    key: sorted(members) for key, members in self.group_members.items()
+                },
+            }
+        )
 
     async def async_cleanup_groups(self) -> list[str]:
         """Delete unavailable historical group identities from storage."""
@@ -161,12 +184,14 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         for logical_id in removed:
             self.group_bindings.pop(logical_id, None)
             self.group_members.pop(logical_id, None)
-        await self._group_store.async_save({
-            "bindings": self.group_bindings,
-            "members": {
-                key: sorted(members) for key, members in self.group_members.items()
-            },
-        })
+        await self._group_store.async_save(
+            {
+                "bindings": self.group_bindings,
+                "members": {
+                    key: sorted(members) for key, members in self.group_members.items()
+                },
+            }
+        )
         self.async_update_listeners()
         return removed
 
@@ -238,15 +263,81 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         zone_id = unique_id.removeprefix(prefix)
         return zone_id if zone_id in self.zones else None
 
+    def client_is_stale(self, client) -> bool:
+        """Detect a connected client whose server-side lastSeen stopped advancing."""
+        seen = self._client_seen.get(client.identifier)
+        return bool(
+            client.connected
+            and seen is not None
+            and self.hass.loop.time() - seen[1] >= CLIENT_STALE_SECONDS
+        )
+
+    def _record_response(self) -> None:
+        """Record an authoritative response, without trusting push as a heartbeat."""
+        self.last_response_time = dt_util.utcnow().isoformat()
+        if self._server is None:
+            return
+        now = self.hass.loop.time()
+        current_ids = set()
+        for client in self._server.clients:
+            current_ids.add(client.identifier)
+            data = getattr(client, "_client", {})
+            last_seen = data.get("lastSeen") if isinstance(data, dict) else None
+            if not isinstance(last_seen, dict):
+                continue
+            raw = (last_seen.get("sec"), last_seen.get("usec"))
+            if not all(isinstance(value, int) for value in raw):
+                continue
+            previous = self._client_seen.get(client.identifier)
+            if previous is None or previous[0] != raw or not client.connected:
+                self._client_seen[client.identifier] = (raw, now)
+        self._client_seen = {
+            key: value for key, value in self._client_seen.items() if key in current_ids
+        }
+
+    @staticmethod
+    def _stop_server(server: Snapserver) -> None:
+        """Detach callbacks before closing a transport, including child objects."""
+        server.set_on_update_callback(None)
+        server.set_on_connect_callback(None)
+        server.set_on_disconnect_callback(None)
+        server.set_new_client_callback(None)
+        for obj in [*server.clients, *server.groups]:
+            obj.set_callback(None)
+        server.stop()
+
     async def _connect(self) -> None:
-        """Create a fresh Snapserver and connect to the host."""
-        self._server = Snapserver(self.hass.loop, self.host, self.port, False)
-        self._server.set_on_update_callback(self._on_update)
-        self._server.set_new_client_callback(self._on_update)
-        self._server.set_on_connect_callback(self._on_connect)
-        self._server.set_on_disconnect_callback(self._on_disconnect)
-        await self._server.start()
+        """Bound startup and discard partially initialized connections on failure."""
+        server = Snapserver(self.hass.loop, self.host, self.port, False)
+        self._server = server
+
+        def current(callback):
+            def dispatch(*args):
+                if self._server is server and not self._stopped:
+                    callback(*args)
+
+            return dispatch
+
+        server.set_on_update_callback(current(self._on_update))
+        server.set_new_client_callback(current(self._on_update))
+        server.set_on_connect_callback(current(self._on_connect))
+        server.set_on_disconnect_callback(current(self._on_disconnect))
+        try:
+            async with asyncio.timeout(CONNECTION_TIMEOUT_SECONDS):
+                await server.start()
+        except BaseException:
+            if self._server is server:
+                self._server = None
+                self._connected = False
+            self._stop_server(server)
+            raise
+        if self._stopped or self._server is not server:
+            self._stop_server(server)
+            return
         self._connected = True
+        self._reconnect_delay = 1
+        self._client_seen.clear()
+        self._record_response()
         self._wire_object_callbacks()
 
     def _wire_object_callbacks(self) -> None:
@@ -267,28 +358,36 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
 
     def _on_object_update(self, _obj) -> None:
         """Snapserver: a single client or group object changed (push)."""
+        if self._stopped or not self._connected:
+            return
         self.last_update_success = True
         self.async_update_listeners()
 
-    def _on_update(self) -> None:
-        """Snapserver: data updated (push)."""
+    def _on_update(self, _client=None) -> None:
+        """Handle both server updates and the library's new-client argument."""
+        if self._stopped or not self._connected:
+            return
         self.last_update_success = True
         self._wire_object_callbacks()
         self.async_update_listeners()
 
     def _on_connect(self) -> None:
         """Snapserver: websocket connected."""
+        if self._stopped:
+            return
         self._connected = True
         self.last_update_success = True
         self._reconnect_delay = 1
-        _LOGGER.info(
-            "Connected to Snapcast server at %s:%s", self.host, self.port
-        )
+        _LOGGER.info("Connected to Snapcast server at %s:%s", self.host, self.port)
         self.async_update_listeners()
 
     def _on_disconnect(self, ex: Exception) -> None:
         """Snapserver: websocket disconnected.  Start reconnection loop."""
+        if self._stopped:
+            return
         self._connected = False
+        self.last_disconnect_time = dt_util.utcnow().isoformat()
+        self.last_connection_error = type(ex).__name__ if ex else "Connection closed"
         self.last_update_success = False
         self.async_update_listeners()
         _LOGGER.warning(
@@ -310,7 +409,7 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
 
     async def _reconnect_loop(self) -> None:
         """Continuously attempt reconnection with exponential backoff."""
-        while not self._connected:
+        while not self._connected and not self._stopped:
             delay = min(self._reconnect_delay, MAX_RECONNECT_DELAY)
             _LOGGER.debug(
                 "Reconnecting to %s:%s in %s seconds",
@@ -319,13 +418,15 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
                 delay,
             )
             await asyncio.sleep(delay)
-            self._reconnect_delay = min(
-                self._reconnect_delay * 2, MAX_RECONNECT_DELAY
-            )
+            self._reconnect_delay = min(self._reconnect_delay * 2, MAX_RECONNECT_DELAY)
 
+            if self._stopped:
+                return
+            self.reconnect_attempts += 1
             try:
                 await self._do_reconnect()
-            except Exception:
+            except Exception as err:
+                self.last_connection_error = type(err).__name__
                 _LOGGER.exception(
                     "Reconnect to %s:%s failed, retrying",
                     self.host,
@@ -342,39 +443,43 @@ class SnapcastUpdateCoordinator(DataUpdateCoordinator[None]):
         if self._server is not None:
             old = self._server
             self._server = None
-            old.set_on_update_callback(None)
-            old.set_on_connect_callback(None)
-            old.set_on_disconnect_callback(None)
-            old.set_new_client_callback(None)
-            old.stop()
+            self._stop_server(old)
 
         await self._connect()
 
     async def _async_update_data(self) -> None:
-        """Polling fallback — push data to entities if connected.
-
-        Raising UpdateFailed while disconnected keeps last_update_success
-        False; the base coordinator would otherwise reset it to True after
-        this method returns, marking entities available with stale data and
-        aborting the reconnect loop.
-        """
-        if not self._connected or self._server is None:
-            raise UpdateFailed(
-                f"Not connected to Snapcast server at {self.host_id}"
-            )
-        self.async_update_listeners()
+        """Refresh authoritative state and recover silent control connections."""
+        server = self._server
+        if not self._connected or server is None or self._stopped:
+            raise UpdateFailed(f"Not connected to Snapcast server at {self.host_id}")
+        try:
+            async with asyncio.timeout(CONNECTION_TIMEOUT_SECONDS):
+                status, error = await server.status()
+            if error or not isinstance(status, dict) or "server" not in status:
+                raise UpdateFailed("Invalid response to Server.GetStatus")
+            if self._server is not server or self._stopped or not self._connected:
+                raise UpdateFailed("Connection changed during status refresh")
+            server.synchronize(status)
+            self._record_response()
+            self._wire_object_callbacks()
+        except Exception as err:
+            if self._server is server and not self._stopped:
+                self._on_disconnect(err)
+                self._server = None
+                self._stop_server(server)
+            raise UpdateFailed("Snapcast status refresh failed") from err
 
     async def disconnect(self) -> None:
-        """Fully disconnect and cancel any pending reconnection."""
+        """Stop retries and await their cancellation before closing the connection."""
+        self._stopped = True
         self._connected = False
-        if self._reconnect_task is not None:
-            self._reconnect_task.cancel()
-            self._reconnect_task = None
-
-        if self._server is not None:
-            self._server.set_on_update_callback(None)
-            self._server.set_on_connect_callback(None)
-            self._server.set_on_disconnect_callback(None)
-            self._server.set_new_client_callback(None)
-            self._server.stop()
-            self._server = None
+        self.last_update_success = False
+        task, self._reconnect_task = self._reconnect_task, None
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        server, self._server = self._server, None
+        if server is not None:
+            self._stop_server(server)
+        self._client_seen.clear()

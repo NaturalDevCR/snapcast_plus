@@ -1,15 +1,16 @@
 """Snapcast config flow."""
 
+import asyncio
 import logging
 import socket
 
-import snapcast.control
 import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PORT
-from snapcast.control.server import CONTROL_PORT
+from snapcast.control.server import CONTROL_PORT, Snapserver
 
 from .const import DEFAULT_TITLE, DOMAIN
+from .coordinator import CONNECTION_TIMEOUT_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,9 +27,7 @@ class SnapcastConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    async def async_step_user(
-        self, user_input: dict | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_user(self, user_input: dict | None = None) -> ConfigFlowResult:
         """Handle the initial (and only) step."""
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -42,9 +41,7 @@ class SnapcastConfigFlow(ConfigFlow, domain=DOMAIN):
             elif error == "cannot_connect":
                 errors["base"] = "cannot_connect"
             else:
-                return self.async_create_entry(
-                    title=DEFAULT_TITLE, data=user_input
-                )
+                return self.async_create_entry(title=DEFAULT_TITLE, data=user_input)
 
         return self.async_show_form(
             step_id="user",
@@ -74,9 +71,7 @@ class SnapcastConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reconfigure",
             data_schema=vol.Schema(
                 {
-                    vol.Required(
-                        CONF_HOST, default=entry.data.get(CONF_HOST, "")
-                    ): str,
+                    vol.Required(CONF_HOST, default=entry.data.get(CONF_HOST, "")): str,
                     vol.Required(
                         CONF_PORT, default=entry.data.get(CONF_PORT, CONTROL_PORT)
                     ): int,
@@ -87,13 +82,14 @@ class SnapcastConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _async_validate_connection(self, host: str, port: int) -> str | None:
         """Probe a Snapcast endpoint and return a translated error key."""
+        client = Snapserver(self.hass.loop, host, port, reconnect=False)
         try:
-            client = await snapcast.control.create_server(
-                self.hass.loop, host, port, reconnect=False
-            )
+            async with asyncio.timeout(CONNECTION_TIMEOUT_SECONDS):
+                await client.start()
         except socket.gaierror:
             return "invalid_host"
-        except OSError:
+        except (OSError, TimeoutError):
             return "cannot_connect"
-        client.stop()
+        finally:
+            client.stop()
         return None

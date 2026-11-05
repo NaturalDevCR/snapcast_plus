@@ -11,9 +11,7 @@ class SnapcastCoordinatorEntity(CoordinatorEntity[SnapcastUpdateCoordinator]):
 
     _name_suffix: str
 
-    def __init__(
-        self, coordinator: SnapcastUpdateCoordinator, device_id: str
-    ) -> None:
+    def __init__(self, coordinator: SnapcastUpdateCoordinator, device_id: str) -> None:
         """Initialise entity.  device_id is the Snapcast client identifier."""
         super().__init__(coordinator)
         self._device_id = device_id
@@ -38,7 +36,8 @@ class SnapcastCoordinatorEntity(CoordinatorEntity[SnapcastUpdateCoordinator]):
         """Available if the coordinator is connected and the client exists."""
         if not self.coordinator.last_update_success:
             return False
-        return self._get_device() is not None
+        device = self._get_device()
+        return device is not None and not self.coordinator.client_is_stale(device)
 
     @property
     def name(self) -> str:
