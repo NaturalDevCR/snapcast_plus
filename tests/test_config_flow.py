@@ -1,5 +1,6 @@
 """Tests for the Snapcast config flow."""
 
+import asyncio
 import socket
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,8 +23,8 @@ async def test_user_flow_success(hass: HomeAssistant) -> None:
     assert result["type"] is FlowResultType.FORM
 
     with patch(
-        "snapcast.control.create_server",
-        AsyncMock(return_value=MagicMock()),
+        "custom_components.snapcast.config_flow.Snapserver",
+        return_value=MagicMock(start=AsyncMock()),
     ):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], USER_INPUT
@@ -41,8 +42,8 @@ async def test_user_flow_cannot_connect(hass: HomeAssistant) -> None:
     )
 
     with patch(
-        "snapcast.control.create_server",
-        AsyncMock(side_effect=OSError),
+        "custom_components.snapcast.config_flow.Snapserver",
+        return_value=MagicMock(start=AsyncMock(side_effect=OSError)),
     ):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], USER_INPUT
@@ -59,8 +60,8 @@ async def test_user_flow_invalid_host(hass: HomeAssistant) -> None:
     )
 
     with patch(
-        "snapcast.control.create_server",
-        AsyncMock(side_effect=socket.gaierror),
+        "custom_components.snapcast.config_flow.Snapserver",
+        return_value=MagicMock(start=AsyncMock(side_effect=socket.gaierror)),
     ):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], USER_INPUT
@@ -85,8 +86,8 @@ async def test_reconfigure_updates_existing_entry(hass: HomeAssistant) -> None:
     assert result["type"] is FlowResultType.FORM
 
     with patch(
-        "snapcast.control.create_server",
-        AsyncMock(return_value=MagicMock()),
+        "custom_components.snapcast.config_flow.Snapserver",
+        return_value=MagicMock(start=AsyncMock()),
     ):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {"host": "snapcast.local", "port": 1704}
@@ -111,8 +112,8 @@ async def test_reconfigure_reports_connection_error(hass: HomeAssistant) -> None
     )
 
     with patch(
-        "snapcast.control.create_server",
-        AsyncMock(side_effect=OSError),
+        "custom_components.snapcast.config_flow.Snapserver",
+        return_value=MagicMock(start=AsyncMock(side_effect=OSError)),
     ):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {"host": "snapcast.local", "port": 1704}
@@ -121,3 +122,26 @@ async def test_reconfigure_reports_connection_error(hass: HomeAssistant) -> None
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
     assert entry.data == USER_INPUT
+
+
+async def test_silent_probe_times_out_and_closes_socket(hass):
+    """A silent endpoint returns a form error and releases its partial connection."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+
+    async def wait_forever():
+        await asyncio.Event().wait()
+
+    server = MagicMock(start=AsyncMock(side_effect=wait_forever))
+    with (
+        patch("custom_components.snapcast.config_flow.Snapserver", return_value=server),
+        patch(
+            "custom_components.snapcast.config_flow.CONNECTION_TIMEOUT_SECONDS", 0.01
+        ),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], USER_INPUT
+        )
+    assert result["errors"] == {"base": "cannot_connect"}
+    server.stop.assert_called_once()

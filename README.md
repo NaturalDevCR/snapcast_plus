@@ -30,7 +30,7 @@ Here is a detailed comparison:
 
 | Aspect | Official Integration | Snapcast Plus |
 |---|---|---|
-| **Update mechanism** | Push-only (`update_interval=None`). If a push callback is missed, entities can get stuck indefinitely. | Push + 45-second polling fallback (`update_interval=timedelta(seconds=45)`). Even if push fails, the state is refreshed periodically. |
+| **Update mechanism** | Push-only (`update_interval=None`). If a push callback is missed, entities can get stuck indefinitely. | Push + 15-second polling fallback (`update_interval=timedelta(seconds=45)`). Even if push fails, the state is refreshed periodically. |
 | **On disconnect behavior** | Calls `async_set_update_error(ex)` — sets error flag but does not notify listeners for re-registration | Explicitly sets `last_update_success = False` AND calls `async_update_listeners()` so entities immediately know the server is gone |
 
 ### Entity availability
@@ -282,7 +282,7 @@ This integration supports Home Assistant **2024.2.0 through current 2026.x relea
 |---|---|
 | Entities show as unavailable | Check that the Snapcast server is running and reachable on the configured host:port |
 | "Cannot connect" on setup | Verify the host address and port. Try the server IP instead of hostname |
-| Volume not updating | The 45s polling fallback will pick it up. Push updates are instant |
+| Volume not updating | The 15s polling fallback will pick it up. Push updates are instant |
 | An old group is unavailable after clients join or split | This is safe by design when membership changed. Use the new group's entity, a persistent zone, or explicitly call `snapcast.reconcile_group` if it is the same logical area. |
 | I need a stable “whole house” control | Create a persistent zone with `snapcast.create_zone`; do not automate against a dynamic group entity. |
 | Old official entities still visible after install | Restart Home Assistant. HA picks up the new domain registration on cold start |
@@ -305,3 +305,17 @@ CI (GitHub Actions) runs the tests with coverage, Ruff, plus [HACS](https://gith
 Apache 2.0 — see [LICENSE](LICENSE) for details.
 
 This project includes code derived from the [Home Assistant Snapcast integration](https://github.com/home-assistant/core/tree/dev/homeassistant/components/snapcast), copyright the Home Assistant project contributors.
+
+
+### Connection health (1.5.0)
+
+Every 15 seconds the integration requests authoritative server state, with a
+10-second deadline. Silent or invalid responses close the old connection and
+start exponential reconnection. Startup and configuration probes are bounded too.
+Clients still reported connected whose `lastSeen` stops advancing for 60 seconds
+become unavailable until their heartbeat advances. Clients explicitly disconnected
+by Snapserver retain their existing `off` state.
+
+Diagnostics include the last successful response and disconnect timestamps,
+connection error type, retry count, and the number of stale clients. They do not
+include client IDs, host addresses, or raw server errors.

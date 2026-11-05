@@ -43,6 +43,8 @@ class FakeSnapserver:
         self.on_disconnect = None
         self.on_new_client = None
         self.start = AsyncMock()
+        self.status = AsyncMock(return_value=({"server": {}}, None))
+        self.synchronize = MagicMock()
         self.stop = MagicMock()
 
     @property

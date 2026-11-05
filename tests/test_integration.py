@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
-from conftest import FakeSnapserver, make_group
+from conftest import FakeSnapserver, make_client, make_group
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import (
     CONF_HOST,
@@ -199,8 +199,10 @@ async def test_group_entity_rebinds_when_snapcast_changes_group_id(
 
     assert hass.states.get(GROUP_ID) is not None
     await hass.services.async_call(
-        "media_player", "volume_mute",
-        {"entity_id": GROUP_ID, "is_volume_muted": True}, blocking=True,
+        "media_player",
+        "volume_mute",
+        {"entity_id": GROUP_ID, "is_volume_muted": True},
+        blocking=True,
     )
     new_group.set_muted.assert_awaited_once_with(True)
 
@@ -505,8 +507,13 @@ async def test_diagnostics_redact_snapcast_identifiers(
         "connected": True,
         "last_update_success": True,
         "reconnect_delay": 1,
+        "reconnect_attempts": 0,
+        "last_response_time": config_entry.runtime_data.last_response_time,
+        "last_disconnect_time": None,
+        "last_error_type": None,
     }
-    assert diagnostics["entities"] == {"clients": 1, "groups": 1}
+    assert diagnostics["connection"]["last_response_time"] is not None
+    assert diagnostics["entities"] == {"clients": 1, "groups": 1, "stale_clients": 0}
     assert diagnostics["persistence"] == {
         "zones": 0,
         "group_bindings": 1,
@@ -601,9 +608,7 @@ async def test_snapshot_and_restore_services(
 
 def test_service_metadata_describes_extended_services() -> None:
     """Every registered Snapcast service is discoverable in the service UI."""
-    metadata = yaml.safe_load(
-        (Path(__file__).parents[1] / "services.yaml").read_text()
-    )
+    metadata = yaml.safe_load((Path(__file__).parents[1] / "services.yaml").read_text())
 
     assert {
         "snapshot",
@@ -617,3 +622,201 @@ def test_service_metadata_describes_extended_services() -> None:
     } <= metadata.keys()
     assert metadata["reconcile_group"]["fields"]["old_entity_id"]["required"]
     assert metadata["create_zone"]["fields"]["clients"]["required"]
+
+
+async def test_new_client_callback_accepts_library_argument(
+    hass, config_entry, snapserver_factory, fake_server
+):
+    """A genuinely new ID can be discovered through the real callback signature."""
+    await setup_entry(hass, config_entry)
+    client = make_client(identifier="new-client", name="Kitchen")
+    fake_server.clients_by_id[client.identifier] = client
+    fake_server.on_new_client(client)
+    await hass.async_block_till_done()
+    assert hass.states.get("media_player.kitchen_snapcast_client").state == "playing"
+
+
+async def test_poll_refreshes_server_state(
+    hass, config_entry, snapserver_factory, fake_server
+):
+    """A missed push is repaired by an authoritative status response."""
+    await setup_entry(hass, config_entry)
+    client = fake_server.client("aa:bb:cc")
+    fake_server.synchronize.side_effect = lambda _: setattr(client, "connected", False)
+    await config_entry.runtime_data.async_refresh()
+    assert hass.states.get(MEDIA_PLAYER_ID).state == "off"
+    fake_server.status.assert_awaited()
+
+
+@pytest.mark.parametrize("response", [(None, None), ({}, None), (None, {"code": -1})])
+async def test_bad_status_starts_reconnection(
+    hass, config_entry, snapserver_factory, fake_server, response
+):
+    """Invalid responses close the old connection and leave entities unavailable."""
+    await setup_entry(hass, config_entry)
+    fake_server.status.return_value = response
+    await config_entry.runtime_data.async_refresh()
+    assert not config_entry.runtime_data.connected
+    assert hass.states.get(MEDIA_PLAYER_ID).state == STATE_UNAVAILABLE
+    fake_server.stop.assert_called_once()
+    assert config_entry.runtime_data._reconnect_task is not None
+
+
+async def test_silent_status_is_bounded(
+    hass, config_entry, snapserver_factory, fake_server
+):
+    """An open but silent peer cannot keep the entry healthy indefinitely."""
+    await setup_entry(hass, config_entry)
+
+    async def never_reply():
+        await asyncio.Event().wait()
+
+    fake_server.status.side_effect = never_reply
+    with patch(
+        "custom_components.snapcast.coordinator.CONNECTION_TIMEOUT_SECONDS", 0.01
+    ):
+        await config_entry.runtime_data.async_refresh()
+    assert not config_entry.runtime_data.connected
+    assert hass.states.get(MEDIA_PLAYER_ID).state == STATE_UNAVAILABLE
+    fake_server.stop.assert_called_once()
+
+
+async def test_startup_timeout_closes_partial_connection(
+    hass, config_entry, snapserver_factory, fake_server
+):
+    """A peer that never answers startup is stopped before HA retries setup."""
+
+    async def never_start():
+        await asyncio.Event().wait()
+
+    fake_server.start.side_effect = never_start
+    with patch(
+        "custom_components.snapcast.coordinator.CONNECTION_TIMEOUT_SECONDS", 0.01
+    ):
+        await setup_entry(hass, config_entry)
+    assert config_entry.state is ConfigEntryState.SETUP_RETRY
+    fake_server.stop.assert_called_once()
+    assert fake_server.on_disconnect is None
+
+
+async def test_frozen_last_seen_marks_client_unavailable_and_recovers(
+    hass, config_entry, snapserver_factory, fake_server
+):
+    """A connected flag cannot hide a frozen heartbeat; advancing it recovers."""
+    client = fake_server.client("aa:bb:cc")
+    client._client = {"lastSeen": {"sec": 100, "usec": 0}}
+    await setup_entry(hass, config_entry)
+    coordinator = config_entry.runtime_data
+    with patch.object(hass.loop, "time", return_value=hass.loop.time() + 61):
+        await coordinator.async_refresh()
+        assert hass.states.get(MEDIA_PLAYER_ID).state == STATE_UNAVAILABLE
+        assert coordinator.client_is_stale(client)
+        client._client["lastSeen"]["sec"] = 101
+        await coordinator.async_refresh()
+        assert hass.states.get(MEDIA_PLAYER_ID).state == "playing"
+
+
+async def test_late_object_callback_does_not_resurrect_entities(
+    hass, config_entry, snapserver_factory, fake_server
+):
+    """An old per-object callback after a disconnect cannot claim recovery."""
+    await setup_entry(hass, config_entry)
+    client = fake_server.client("aa:bb:cc")
+    callback = client.set_callback.call_args.args[0]
+    fake_server.on_disconnect(OSError("lost"))
+    callback(client)
+    assert hass.states.get(MEDIA_PLAYER_ID).state == STATE_UNAVAILABLE
+    assert not config_entry.runtime_data.last_update_success
+
+
+async def test_unload_awaits_inflight_reconnect(
+    hass, config_entry, snapserver_factory, fake_server
+):
+    """Unloading while startup awaits I/O cancels it and closes both transports."""
+    await setup_entry(hass, config_entry)
+    fake_server.on_disconnect(OSError("lost"))
+    coordinator = config_entry.runtime_data
+    entered = asyncio.Event()
+
+    async def blocked_connect():
+        entered.set()
+        await asyncio.Event().wait()
+
+    with patch.object(coordinator, "_connect", side_effect=blocked_connect):
+        await asyncio.wait_for(entered.wait(), 2)
+        task = coordinator._reconnect_task
+        assert await hass.config_entries.async_unload(config_entry.entry_id)
+        assert task.done()
+        assert coordinator.server is None
+        assert not coordinator.connected
+
+
+async def test_real_tcp_peer_stops_answering(hass, socket_enabled):
+    """A real JSON-RPC connection that goes silent is closed and retried."""
+    import json
+
+    writers = []
+    handlers = []
+    requests = []
+    silent = False
+
+    async def serve(reader, writer):
+        writers.append(writer)
+        handlers.append(asyncio.current_task())
+        try:
+            while line := await reader.readline():
+                request = json.loads(line)
+                requests.append(request["method"])
+                if silent:
+                    continue
+                status = {
+                    "server": {
+                        "server": {"snapserver": {"version": "0.35.0"}},
+                        "groups": [],
+                        "streams": [],
+                    }
+                }
+                writer.write(
+                    (
+                        json.dumps(
+                            {"id": request["id"], "jsonrpc": "2.0", "result": status}
+                        )
+                        + "\r\n"
+                    ).encode()
+                )
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    listener = await asyncio.start_server(serve, "127.0.0.1", 0)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Snapcast",
+        data={
+            CONF_HOST: "127.0.0.1",
+            CONF_PORT: listener.sockets[0].getsockname()[1],
+        },
+    )
+    try:
+        await setup_entry(hass, entry)
+        assert entry.state is ConfigEntryState.LOADED
+        assert requests.count("Server.GetStatus") >= 2
+        silent = True
+        with patch(
+            "custom_components.snapcast.coordinator.CONNECTION_TIMEOUT_SECONDS", 0.01
+        ):
+            await entry.runtime_data.async_refresh()
+        assert not entry.runtime_data.connected
+        assert not entry.runtime_data.last_update_success
+        assert entry.runtime_data.server is None
+        assert requests.count("Server.GetStatus") >= 3
+        assert entry.runtime_data._reconnect_task is not None
+        assert await hass.config_entries.async_unload(entry.entry_id)
+    finally:
+        listener.close()
+        await listener.wait_closed()
+        for writer in writers:
+            writer.close()
+        if handlers:
+            await asyncio.gather(*handlers)
